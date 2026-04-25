@@ -97,8 +97,8 @@ function useResponsive(){
   const ipad=w>=700;
   // Paysage actif seulement quand on est sur un grand écran ET en orientation paysage
   const landscape=ipad && w>h;
-  // En paysage, le piano prend toute la largeur dispo et reste raisonnable en hauteur
-  const pianoH=landscape?Math.min(210,Math.floor(h*0.32)):(ipad?240:170);
+  // En paysage, le piano prend toute la largeur dispo et reste compact en hauteur
+  const pianoH=landscape?Math.min(180,Math.floor(h*0.28)):(ipad?240:170);
   const pianoMaxW=landscape?Math.min(w-32,1100):(ipad?680:540);
   return{
     ipad, landscape, w, h,
@@ -266,8 +266,8 @@ function Piano({keys,hl,hl2,fm,c1,c2,pressed,onClick,detectedNote,midiNotes,R}){
     </div>);
   // En paysage iPad, on fixe le piano au bas de l'écran sur toute la largeur
   if(R.landscape){
-    return(<div style={{position:"fixed",left:0,right:0,bottom:0,padding:"12px 20px 18px",
-      background:"linear-gradient(180deg,rgba(10,10,20,0) 0%,rgba(10,10,20,.85) 30%,rgba(10,10,20,.97) 100%)",
+    return(<div style={{position:"fixed",left:0,right:0,bottom:0,padding:"8px 20px 10px",
+      background:"linear-gradient(180deg,rgba(10,10,20,0) 0%,rgba(10,10,20,.85) 25%,rgba(10,10,20,.97) 100%)",
       backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",zIndex:50}}>{inner}</div>);
   }
   return inner;
@@ -280,15 +280,18 @@ function Btn({children,onClick,disabled,style:s={}}){const R=useResponsive();
   return <button onClick={onClick} disabled={disabled} style={{minWidth:R.btn.min,minHeight:R.btn.min,borderRadius:R.rad-2,border:"1px solid #334155",background:"transparent",color:"#94a3b8",cursor:disabled?"default":"pointer",fontSize:R.font.sm,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"inherit",fontWeight:600,padding:"4px 8px",...s}}>{children}</button>}
 
 function BpmCtrl({bpm,setBpm,running,toggle,beat,color,R}){
-  return(<div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:R.gap*2,padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)"}}>
-    <div style={{textAlign:"center"}}><div style={{fontSize:R.font.xs,color:"#64748b",marginBottom:3}}>BPM</div>
-      <div style={{display:"flex",alignItems:"center",gap:R.gap}}>
-        <Btn onClick={()=>setBpm(Math.max(40,bpm-5))}>-</Btn>
-        <span style={{fontSize:R.font.lg,fontWeight:700,color:"#e2e8f0",minWidth:36,textAlign:"center"}}>{bpm}</span>
-        <Btn onClick={()=>setBpm(Math.min(120,bpm+5))}>+</Btn></div></div>
-    <button onClick={toggle} style={{width:R.btn.play,height:R.btn.play,borderRadius:"50%",cursor:"pointer",fontSize:R.font.lg,border:`2px solid ${running?"#ef4444":"#10b981"}`,background:running?"#ef444422":"#10b98122",color:running?"#ef4444":"#10b981",display:"flex",alignItems:"center",justifyContent:"center"}}>{running?"■":"▶"}</button>
+  const compact=R.landscape;
+  return(<div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:compact?R.gap+4:R.gap*2,padding:compact?`${R.gap}px ${R.pad}px`:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)"}}>
+    <div style={{display:"flex",alignItems:"center",gap:R.gap}}>
+      {!compact&&<div style={{fontSize:R.font.xs,color:"#64748b"}}>BPM</div>}
+      <Btn onClick={()=>setBpm(Math.max(40,bpm-5))} style={{minHeight:compact?34:R.btn.min,minWidth:compact?34:R.btn.min,padding:"2px 8px"}}>-</Btn>
+      <span style={{fontSize:compact?R.font.md+2:R.font.lg,fontWeight:700,color:"#e2e8f0",minWidth:32,textAlign:"center"}}>{bpm}</span>
+      <Btn onClick={()=>setBpm(Math.min(120,bpm+5))} style={{minHeight:compact?34:R.btn.min,minWidth:compact?34:R.btn.min,padding:"2px 8px"}}>+</Btn>
+      {compact&&<div style={{fontSize:R.font.xs,color:"#64748b",marginLeft:2}}>bpm</div>}
+    </div>
+    <button onClick={toggle} style={{width:compact?40:R.btn.play,height:compact?40:R.btn.play,borderRadius:"50%",cursor:"pointer",fontSize:compact?R.font.md:R.font.lg,border:`2px solid ${running?"#ef4444":"#10b981"}`,background:running?"#ef444422":"#10b98122",color:running?"#ef4444":"#10b981",display:"flex",alignItems:"center",justifyContent:"center"}}>{running?"■":"▶"}</button>
     {running&&beat!==undefined&&<div style={{display:"flex",gap:R.gap}}>
-      {[0,1,2,3].map(b=><div key={b} style={{width:R.ipad?14:10,height:R.ipad?14:10,borderRadius:"50%",background:b===beat?color:"rgba(255,255,255,.1)",boxShadow:b===beat?`0 0 8px ${color}66`:"none",transition:"all .1s"}}/>)}</div>}
+      {[0,1,2,3].map(b=><div key={b} style={{width:compact?10:(R.ipad?14:10),height:compact?10:(R.ipad?14:10),borderRadius:"50%",background:b===beat?color:"rgba(255,255,255,.1)",boxShadow:b===beat?`0 0 8px ${color}66`:"none",transition:"all .1s"}}/>)}</div>}
   </div>);
 }
 
@@ -592,11 +595,23 @@ function L7({song,R,...inp}){
 /* ═══════════════════════════════════════════════════════════════════
    TIMER
    ═══════════════════════════════════════════════════════════════════ */
-function Timer({R}){
+function Timer({R,compact}){
   const[on,setOn]=useState(false);const[sec,setSec]=useState(0);const[total,setTotal]=useState(0);
   useEffect(()=>{if(on){const id=setInterval(()=>setSec(s=>s+1),1000);return()=>clearInterval(id)}},[on]);
   const toggle=()=>{if(on){setTotal(t=>t+sec);setSec(0)}setOn(!on)};
   const fmt=s=>`${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+  if(compact){
+    // Variante compacte : tout sur une ligne, pour l'intégration dans le header en paysage
+    return(
+      <div style={{display:"flex",alignItems:"center",gap:R.gap,padding:`6px ${R.gap+4}px`,borderRadius:R.rad-2,
+        background:on?"rgba(16,185,129,.08)":"rgba(255,255,255,.03)",border:on?"1px solid rgba(16,185,129,.2)":"1px solid rgba(255,255,255,.06)"}}>
+        <div style={{fontSize:R.font.xs,color:"#64748b"}}>Pratique</div>
+        <div style={{fontSize:R.font.md,fontWeight:700,color:on?"#34d399":"#94a3b8",fontVariantNumeric:"tabular-nums",minWidth:46}}>{fmt(sec)}</div>
+        <button onClick={toggle} style={{minHeight:30,minWidth:30,padding:"2px 8px",borderRadius:R.rad-4,fontFamily:"inherit",fontSize:R.font.xs,fontWeight:600,cursor:"pointer",
+          border:on?"1px solid #ef444455":"1px solid #10b98155",background:on?"#ef444422":"#10b98122",color:on?"#ef4444":"#10b981"}}>{on?"❚❚":"▶"}</button>
+        {total>0&&<div style={{fontSize:R.font.xs,color:"#64748b"}}>{Math.floor((total+sec)/60)} min</div>}
+      </div>);
+  }
   return(
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:R.gap*2,padding:`${R.ipad?10:8}px ${R.pad}px`,borderRadius:R.rad,
       background:on?"rgba(16,185,129,.08)":"rgba(255,255,255,.03)",border:on?"1px solid rgba(16,185,129,.2)":"1px solid rgba(255,255,255,.06)",marginBottom:R.pad}}>
@@ -628,16 +643,16 @@ export default function PianoTutor(){
 
   // Bloc d'en-tête de leçon (objectifs + tip), réutilisé en portrait et en paysage
   const lessonHeader=(
-    <div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginBottom:R.landscape?0:R.pad}}>
+    <div style={{padding:R.landscape?R.gap+4:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginBottom:R.landscape?0:R.pad}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
-        <div><div style={{fontSize:R.font.md,fontWeight:700,color:"#e2e8f0"}}>{L.t}</div><div style={{fontSize:R.font.sm,color:"#64748b"}}>{L.s}</div></div>
+        <div><div style={{fontSize:R.landscape?R.font.sm+1:R.font.md,fontWeight:700,color:"#e2e8f0"}}>{L.t}</div><div style={{fontSize:R.font.xs+1,color:"#64748b"}}>{L.s}</div></div>
         <div style={{fontSize:R.font.xs,color:"#475569"}}>{L.wk}</div></div>
-      <div style={{marginTop:R.gap+2}}>
+      <div style={{marginTop:R.gap}}>
         {L.goals.map((g,i)=>{const d=done.has(`${songId}-${les}-${i}`);return(
-          <div key={i} onClick={()=>tog(i)} style={{display:"flex",alignItems:"center",gap:R.gap+2,padding:`${R.ipad?5:3}px 0`,cursor:"pointer"}}>
-            <div style={{width:R.ipad?18:14,height:R.ipad?18:14,borderRadius:4,flexShrink:0,border:d?"none":"1px solid #334155",background:d?"#10b981":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:R.font.xs,color:"#fff"}}>{d&&"✓"}</div>
-            <div style={{fontSize:R.font.sm,color:d?"#64748b":"#94a3b8",textDecoration:d?"line-through":"none"}}>{g}</div></div>)})}</div>
-      <div style={{marginTop:R.gap+2,padding:`${R.ipad?8:5}px ${R.pad}px`,borderRadius:R.rad-4,background:"rgba(251,191,36,.06)",border:"1px solid rgba(251,191,36,.15)",fontSize:R.font.sm,color:"#fbbf24",lineHeight:1.6}}>{L.tip}</div>
+          <div key={i} onClick={()=>tog(i)} style={{display:"flex",alignItems:"center",gap:R.gap,padding:`${R.landscape?2:(R.ipad?5:3)}px 0`,cursor:"pointer"}}>
+            <div style={{width:R.landscape?14:(R.ipad?18:14),height:R.landscape?14:(R.ipad?18:14),borderRadius:4,flexShrink:0,border:d?"none":"1px solid #334155",background:d?"#10b981":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:R.font.xs,color:"#fff"}}>{d&&"✓"}</div>
+            <div style={{fontSize:R.landscape?R.font.xs+1:R.font.sm,color:d?"#64748b":"#94a3b8",textDecoration:d?"line-through":"none",lineHeight:1.3}}>{g}</div></div>)})}</div>
+      <div style={{marginTop:R.gap,padding:`${R.landscape?5:(R.ipad?8:5)}px ${R.gap+4}px`,borderRadius:R.rad-4,background:"rgba(251,191,36,.06)",border:"1px solid rgba(251,191,36,.15)",fontSize:R.landscape?R.font.xs+1:R.font.sm,color:"#fbbf24",lineHeight:1.5}}>{L.tip}</div>
     </div>);
 
   // Bloc de leçon active (key force le remount = nettoie tous les intervals)
@@ -646,34 +661,49 @@ export default function PianoTutor(){
   return(
     <div style={{minHeight:"100vh",background:"linear-gradient(180deg,#0a0a14,#12121f 40%,#161625)",color:"#e2e8f0",
       fontFamily:"'JetBrains Mono','SF Mono','Fira Code',monospace",
-      padding:R.landscape?`14px 24px ${R.piano.h+36}px`:`${R.ipad?20:14}px ${R.ipad?24:12}px`,
+      padding:R.landscape?`8px 24px ${R.piano.h+24}px`:`${R.ipad?20:14}px ${R.ipad?24:12}px`,
       maxWidth:R.landscape?1280:(R.ipad?780:600),margin:"0 auto"}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}`}</style>
 
-      {/* Header */}
-      <div style={{textAlign:"center",marginBottom:R.landscape?R.gap+2:R.pad}}>
-        <h1 style={{fontSize:R.font.lg+2,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:"#94a3b8",margin:0}}>{song.title} - Piano</h1>
-        <p style={{fontSize:R.font.xs+1,color:"#475569",margin:"3px 0 0"}}>{song.artist} | 4 semaines pour gagner ton pari</p>
-      </div>
+      {R.landscape ? (
+        // En paysage : titre + artiste + Timer compact sur une seule ligne
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:R.pad,marginBottom:R.gap+2}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:R.pad,minWidth:0,flex:1}}>
+            <h1 style={{fontSize:R.font.md+2,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:"#94a3b8",margin:0,whiteSpace:"nowrap"}}>{song.title} - Piano</h1>
+            <p style={{fontSize:R.font.xs,color:"#475569",margin:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{song.artist} | 4 semaines pour gagner ton pari</p>
+          </div>
+          {songKeys.length>1&&<div style={{display:"flex",gap:R.gap}}>
+            {songKeys.map(k=><button key={k} onClick={()=>{setSongId(k);setLes(0)}} style={{
+              padding:"6px 12px",borderRadius:R.rad-2,fontSize:R.font.xs,fontFamily:"inherit",fontWeight:600,cursor:"pointer",minHeight:30,
+              border:k===songId?`1px solid ${SONGS[k].color}`:"1px solid #334155",background:k===songId?`${SONGS[k].color}22`:"transparent",
+              color:k===songId?SONGS[k].color:"#64748b"}}>{SONGS[k].title}</button>)}</div>}
+          <Timer R={R} compact={true}/>
+        </div>
+      ) : (
+        // En portrait, layout classique
+        <>
+          <div style={{textAlign:"center",marginBottom:R.pad}}>
+            <h1 style={{fontSize:R.font.lg+2,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:"#94a3b8",margin:0}}>{song.title} - Piano</h1>
+            <p style={{fontSize:R.font.xs+1,color:"#475569",margin:"3px 0 0"}}>{song.artist} | 4 semaines pour gagner ton pari</p>
+          </div>
+          {songKeys.length>1&&<div style={{display:"flex",gap:R.gap,justifyContent:"center",marginBottom:R.pad}}>
+            {songKeys.map(k=><button key={k} onClick={()=>{setSongId(k);setLes(0)}} style={{
+              padding:`${R.ipad?10:7}px ${R.ipad?20:14}px`,borderRadius:R.rad,fontSize:R.font.sm,fontFamily:"inherit",fontWeight:600,cursor:"pointer",minHeight:R.btn.min,
+              border:k===songId?`2px solid ${SONGS[k].color}`:"1px solid #334155",background:k===songId?`${SONGS[k].color}22`:"transparent",
+              color:k===songId?SONGS[k].color:"#64748b"}}>{SONGS[k].title}</button>)}</div>}
+          <Timer R={R}/>
+        </>
+      )}
 
-      {/* Song selector (ready for multiple songs) */}
-      {songKeys.length>1&&<div style={{display:"flex",gap:R.gap,justifyContent:"center",marginBottom:R.pad}}>
-        {songKeys.map(k=><button key={k} onClick={()=>{setSongId(k);setLes(0)}} style={{
-          padding:`${R.ipad?10:7}px ${R.ipad?20:14}px`,borderRadius:R.rad,fontSize:R.font.sm,fontFamily:"inherit",fontWeight:600,cursor:"pointer",minHeight:R.btn.min,
-          border:k===songId?`2px solid ${SONGS[k].color}`:"1px solid #334155",background:k===songId?`${SONGS[k].color}22`:"transparent",
-          color:k===songId?SONGS[k].color:"#64748b"}}>{SONGS[k].title}</button>)}</div>}
-
-      <Timer R={R}/>
-
-      {/* Lesson tabs */}
-      <div style={{display:"flex",gap:R.ipad?5:3,marginBottom:R.pad,overflowX:"auto",paddingBottom:2}}>
+      {/* Lesson tabs — plus compactes en paysage */}
+      <div style={{display:"flex",gap:R.ipad?5:3,marginBottom:R.landscape?R.gap+2:R.pad,overflowX:"auto",paddingBottom:2}}>
         {song.lessons.map((l,i)=>{const dn=l.goals.every((_,gi)=>done.has(`${songId}-${i}-${gi}`));const ac=i===les;
           return(<button key={i} onClick={()=>setLes(i)} style={{
-            flex:"1 0 0",minWidth:0,padding:R.tab.p,borderRadius:R.rad-2,cursor:"pointer",fontFamily:"inherit",textAlign:"center",
+            flex:"1 0 0",minWidth:0,padding:R.landscape?"5px 4px":R.tab.p,borderRadius:R.rad-2,cursor:"pointer",fontFamily:"inherit",textAlign:"center",
             border:ac?"1px solid #6366f1":"1px solid rgba(255,255,255,.05)",background:ac?"rgba(99,102,241,.1)":"rgba(255,255,255,.02)",
-            opacity:ac?1:.5,transition:"all .2s",minHeight:R.btn.min}}>
-            <div style={{fontSize:R.tab.icon,marginBottom:1}}>{dn?<span style={{color:"#10b981"}}>✓</span>:l.icon}</div>
-            <div style={{fontSize:R.tab.f,fontWeight:600,color:ac?"#818cf8":"#64748b",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{l.t}</div>
+            opacity:ac?1:.5,transition:"all .2s",minHeight:R.landscape?34:R.btn.min}}>
+            <div style={{fontSize:R.landscape?13:R.tab.icon,marginBottom:0,lineHeight:1}}>{dn?<span style={{color:"#10b981"}}>✓</span>:l.icon}</div>
+            <div style={{fontSize:R.landscape?10:R.tab.f,fontWeight:600,color:ac?"#818cf8":"#64748b",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",lineHeight:1.2}}>{l.t}</div>
           </button>)})}
       </div>
 
