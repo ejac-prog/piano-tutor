@@ -89,12 +89,20 @@ for(let o=2;o<=6;o++) MIDI_NAMES.forEach((n,i)=>{const midi=(o+1)*12+i;ALL_NOTES
    RESPONSIVE HOOK — iPad vs phone
    ═══════════════════════════════════════════════════════════════════ */
 function useResponsive(){
-  const[w,setW]=useState(typeof window!=="undefined"?window.innerWidth:400);
-  useEffect(()=>{const h=()=>setW(window.innerWidth);window.addEventListener("resize",h);return()=>window.removeEventListener("resize",h)},[]);
+  const[s,setS]=useState(()=>typeof window!=="undefined"?{w:window.innerWidth,h:window.innerHeight}:{w:400,h:800});
+  useEffect(()=>{const h=()=>setS({w:window.innerWidth,h:window.innerHeight});
+    window.addEventListener("resize",h);window.addEventListener("orientationchange",h);
+    return()=>{window.removeEventListener("resize",h);window.removeEventListener("orientationchange",h)}},[]);
+  const{w,h}=s;
   const ipad=w>=700;
+  // Paysage actif seulement quand on est sur un grand écran ET en orientation paysage
+  const landscape=ipad && w>h;
+  // En paysage, le piano prend toute la largeur dispo et reste raisonnable en hauteur
+  const pianoH=landscape?Math.min(210,Math.floor(h*0.32)):(ipad?240:170);
+  const pianoMaxW=landscape?Math.min(w-32,1100):(ipad?680:540);
   return{
-    ipad, w,
-    piano:{h:ipad?240:170, maxW:ipad?680:540},
+    ipad, landscape, w, h,
+    piano:{h:pianoH, maxW:pianoMaxW},
     font:{xs:ipad?11:8, sm:ipad?13:10, md:ipad?16:13, lg:ipad?20:16, xl:ipad?26:20, xxl:ipad?32:24},
     btn:{min:ipad?44:26, play:ipad?52:42, lg:ipad?56:48},
     gap:ipad?10:6, pad:ipad?18:12, rad:ipad?12:10,
@@ -107,13 +115,34 @@ function useResponsive(){
    AUDIO ENGINE
    ═══════════════════════════════════════════════════════════════════ */
 function useAudio(){
-  const ctx=useRef(null);const unlocked=useRef(false);const pool=useRef([]);
+  const ctx=useRef(null);const unlocked=useRef(false);const pool=useRef([]);const silentEl=useRef(null);
   const getCtx=useCallback(()=>{if(!ctx.current)ctx.current=new(window.AudioContext||window.webkitAudioContext)();return ctx.current},[]);
   const unlock=useCallback(()=>{
     const c=getCtx();if(c.state==="suspended")c.resume();
     if(unlocked.current)return;
+    // Oscillateur silencieux pour débloquer le AudioContext sur iOS
     const o=c.createOscillator(),g=c.createGain();g.gain.value=0;
-    o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.001);unlocked.current=true;
+    o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.001);
+    // Contournement du switch silencieux iOS : un <audio> HTML5 silencieux en boucle
+    // bascule la catégorie audio iOS de "ambient" vers "playback", ce qui permet au
+    // son de jouer même quand l'iPad est en mode silencieux (switch latéral activé).
+    if(!silentEl.current){
+      try{
+        // Génère un WAV strictement silencieux (50 ms, 8 kHz mono 16-bit) en runtime
+        const sr=8000,ns=400,buf=new ArrayBuffer(44+ns*2),v=new DataView(buf);
+        v.setUint32(0,0x46464952,true);v.setUint32(4,36+ns*2,true);v.setUint32(8,0x45564157,true);
+        v.setUint32(12,0x20746d66,true);v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+        v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
+        v.setUint32(36,0x61746164,true);v.setUint32(40,ns*2,true);
+        const url=URL.createObjectURL(new Blob([buf],{type:"audio/wav"}));
+        const a=document.createElement("audio");
+        a.setAttribute("playsinline","");a.setAttribute("webkit-playsinline","");
+        a.loop=true;a.preload="auto";a.volume=1;a.src=url;
+        const p=a.play();if(p&&p.catch)p.catch(()=>{});
+        silentEl.current=a;
+      }catch(e){}
+    }
+    unlocked.current=true;
   },[getCtx]);
   const cleanup=useCallback(()=>{while(pool.current.length>14){const x=pool.current.shift();try{x.o.stop();x.o.disconnect();x.g.disconnect()}catch(e){}}},[]);
   const note=useCallback((n,v=0.3)=>{
@@ -207,7 +236,7 @@ function Piano({keys,hl,hl2,fm,c1,c2,pressed,onClick,detectedNote,midiNotes,R}){
   const ww=100/ws.length;
   const clr=n=>{if(hl&&hl.has(n))return c1;if(hl2&&hl2.has(n))return c2||"#e879f9";return null};
   const isDet=n=>(detectedNote&&detectedNote===n)||(midiNotes&&midiNotes.has(n));
-  return(
+  const inner=(
     <div style={{position:"relative",width:"100%",maxWidth:R.piano.maxW,height:R.piano.h,margin:"0 auto"}}>
       <div style={{display:"flex",gap:2,height:"100%",position:"relative",zIndex:1}}>
         {ws.map(k=>{const cl=clr(k.note),pr=pressed.has(k.note),det=isDet(k.note);return(
@@ -235,6 +264,13 @@ function Piano({keys,hl,hl2,fm,c1,c2,pressed,onClick,detectedNote,midiNotes,R}){
           <div style={{fontSize:R.font.xs-2,fontWeight:600,color:det?"#fff":cl?"#fff":"#64748b"}}>{fr(k.note)}</div>
         </div>);})}
     </div>);
+  // En paysage iPad, on fixe le piano au bas de l'écran sur toute la largeur
+  if(R.landscape){
+    return(<div style={{position:"fixed",left:0,right:0,bottom:0,padding:"12px 20px 18px",
+      background:"linear-gradient(180deg,rgba(10,10,20,0) 0%,rgba(10,10,20,.85) 30%,rgba(10,10,20,.97) 100%)",
+      backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",zIndex:50}}>{inner}</div>);
+  }
+  return inner;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -590,14 +626,32 @@ export default function PianoTutor(){
   const tog=i=>setDone(p=>{const s=new Set(p);const k=`${songId}-${les}-${i}`;s.has(k)?s.delete(k):s.add(k);return s});
   const LessonComp=LESSON_COMPONENTS[les];
 
+  // Bloc d'en-tête de leçon (objectifs + tip), réutilisé en portrait et en paysage
+  const lessonHeader=(
+    <div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginBottom:R.landscape?0:R.pad}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+        <div><div style={{fontSize:R.font.md,fontWeight:700,color:"#e2e8f0"}}>{L.t}</div><div style={{fontSize:R.font.sm,color:"#64748b"}}>{L.s}</div></div>
+        <div style={{fontSize:R.font.xs,color:"#475569"}}>{L.wk}</div></div>
+      <div style={{marginTop:R.gap+2}}>
+        {L.goals.map((g,i)=>{const d=done.has(`${songId}-${les}-${i}`);return(
+          <div key={i} onClick={()=>tog(i)} style={{display:"flex",alignItems:"center",gap:R.gap+2,padding:`${R.ipad?5:3}px 0`,cursor:"pointer"}}>
+            <div style={{width:R.ipad?18:14,height:R.ipad?18:14,borderRadius:4,flexShrink:0,border:d?"none":"1px solid #334155",background:d?"#10b981":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:R.font.xs,color:"#fff"}}>{d&&"✓"}</div>
+            <div style={{fontSize:R.font.sm,color:d?"#64748b":"#94a3b8",textDecoration:d?"line-through":"none"}}>{g}</div></div>)})}</div>
+      <div style={{marginTop:R.gap+2,padding:`${R.ipad?8:5}px ${R.pad}px`,borderRadius:R.rad-4,background:"rgba(251,191,36,.06)",border:"1px solid rgba(251,191,36,.15)",fontSize:R.font.sm,color:"#fbbf24",lineHeight:1.6}}>{L.tip}</div>
+    </div>);
+
+  // Bloc de leçon active (key force le remount = nettoie tous les intervals)
+  const lessonContent=<LessonComp key={`${songId}-${les}`} song={song} R={R} a={au} pitch={pitch} midi={midi} detNote={detNote} midiNotes={midi.activeNotes}/>;
+
   return(
     <div style={{minHeight:"100vh",background:"linear-gradient(180deg,#0a0a14,#12121f 40%,#161625)",color:"#e2e8f0",
-      fontFamily:"'JetBrains Mono','SF Mono','Fira Code',monospace",padding:`${R.ipad?20:14}px ${R.ipad?24:12}px`,
-      maxWidth:R.ipad?780:600,margin:"0 auto"}}>
+      fontFamily:"'JetBrains Mono','SF Mono','Fira Code',monospace",
+      padding:R.landscape?`14px 24px ${R.piano.h+36}px`:`${R.ipad?20:14}px ${R.ipad?24:12}px`,
+      maxWidth:R.landscape?1280:(R.ipad?780:600),margin:"0 auto"}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}`}</style>
 
       {/* Header */}
-      <div style={{textAlign:"center",marginBottom:R.pad}}>
+      <div style={{textAlign:"center",marginBottom:R.landscape?R.gap+2:R.pad}}>
         <h1 style={{fontSize:R.font.lg+2,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:"#94a3b8",margin:0}}>{song.title} - Piano</h1>
         <p style={{fontSize:R.font.xs+1,color:"#475569",margin:"3px 0 0"}}>{song.artist} | 4 semaines pour gagner ton pari</p>
       </div>
@@ -623,21 +677,18 @@ export default function PianoTutor(){
           </button>)})}
       </div>
 
-      {/* Lesson header */}
-      <div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginBottom:R.pad}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
-          <div><div style={{fontSize:R.font.md,fontWeight:700,color:"#e2e8f0"}}>{L.t}</div><div style={{fontSize:R.font.sm,color:"#64748b"}}>{L.s}</div></div>
-          <div style={{fontSize:R.font.xs,color:"#475569"}}>{L.wk}</div></div>
-        <div style={{marginTop:R.gap+2}}>
-          {L.goals.map((g,i)=>{const d=done.has(`${songId}-${les}-${i}`);return(
-            <div key={i} onClick={()=>tog(i)} style={{display:"flex",alignItems:"center",gap:R.gap+2,padding:`${R.ipad?5:3}px 0`,cursor:"pointer"}}>
-              <div style={{width:R.ipad?18:14,height:R.ipad?18:14,borderRadius:4,flexShrink:0,border:d?"none":"1px solid #334155",background:d?"#10b981":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:R.font.xs,color:"#fff"}}>{d&&"✓"}</div>
-              <div style={{fontSize:R.font.sm,color:d?"#64748b":"#94a3b8",textDecoration:d?"line-through":"none"}}>{g}</div></div>)})}</div>
-        <div style={{marginTop:R.gap+2,padding:`${R.ipad?8:5}px ${R.pad}px`,borderRadius:R.rad-4,background:"rgba(251,191,36,.06)",border:"1px solid rgba(251,191,36,.15)",fontSize:R.font.sm,color:"#fbbf24",lineHeight:1.6}}>{L.tip}</div>
-      </div>
-
-      {/* Active lesson — key forces remount = cleans up intervals */}
-      <LessonComp key={`${songId}-${les}`} song={song} R={R} a={au} pitch={pitch} midi={midi} detNote={detNote} midiNotes={midi.activeNotes}/>
+      {/* Zone leçon : grille 2 colonnes en paysage, flow normal en portrait */}
+      {R.landscape ? (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:R.pad,alignItems:"start"}}>
+          <div style={{minWidth:0}}>{lessonContent}</div>
+          <div style={{position:"sticky",top:14}}>{lessonHeader}</div>
+        </div>
+      ) : (
+        <>
+          {lessonHeader}
+          {lessonContent}
+        </>
+      )}
 
       {/* Nav */}
       <div style={{display:"flex",justifyContent:"space-between",marginTop:R.pad+4,padding:"0 2px"}}>
