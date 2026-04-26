@@ -1,4 +1,9 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
+
+/* ═══════════════════════════════════════════════════════════════════
+   SLOTS CONTEXT — pousser top (header right) et side (sidebar) JSX
+   ═══════════════════════════════════════════════════════════════════ */
+const SlotsCtx = createContext({ setTop:()=>{}, setSide:()=>{}, has:false });
 
 /* ═══════════════════════════════════════════════════════════════════
    SONG DATA — add new songs here
@@ -101,9 +106,9 @@ function useResponsive(){
   const ipad=w>=700;
   // Paysage actif seulement quand on est sur un grand écran ET en orientation paysage
   const landscape=ipad && w>h;
-  // En paysage, le piano prend toute la largeur dispo et reste compact en hauteur
-  const pianoH=landscape?Math.min(180,Math.floor(h*0.28)):(ipad?240:170);
-  const pianoMaxW=landscape?Math.min(w-32,1100):(ipad?680:540);
+  // En paysage, piano plus haut pour des touches plus longues (proche de la réalité)
+  const pianoH=landscape?Math.min(240,Math.floor(h*0.34)):(ipad?240:170);
+  const pianoMaxW=landscape?Math.min(w-48,1200):(ipad?680:540);
   return{
     ipad, landscape, w, h,
     piano:{h:pianoH, maxW:pianoMaxW},
@@ -305,6 +310,49 @@ function BpmCtrl({bpm,setBpm,running,toggle,beat,color,R}){
   </div>);
 }
 
+/* ───────────────────────────────────────────────────────────────────
+   LessonControls : panneau unifié de contrôles (tempo + écouter/pratiquer)
+   Utilisé dans la colonne droite (paysage) ou en bas du contenu (portrait).
+   ─────────────────────────────────────────────────────────────────── */
+function LessonControls({R,color,bpm,setBpm,minBpm=40,maxBpm=120,onListen,onPractice,onStop,isPracticing,beat,extra}){
+  return(
+    <div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.08)",display:"flex",flexDirection:"column",gap:R.gap+2}}>
+      {bpm!==undefined&&(
+        <div>
+          <div style={{fontSize:R.font.xs,color:"#64748b",letterSpacing:1.5,textTransform:"uppercase",marginBottom:R.gap-2,fontWeight:600}}>Tempo</div>
+          <div style={{display:"flex",alignItems:"center",gap:R.gap+2,justifyContent:"center"}}>
+            <Btn onClick={()=>setBpm(Math.max(minBpm,bpm-5))} style={{minHeight:R.btn.min,minWidth:R.btn.min,padding:"4px 10px",fontSize:R.font.lg,fontWeight:700}}>−</Btn>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",minWidth:60}}>
+              <span style={{fontSize:R.font.xl,fontWeight:700,color:"#e2e8f0",lineHeight:1,fontVariantNumeric:"tabular-nums"}}>{bpm}</span>
+              <span style={{fontSize:R.font.xs-1,color:"#64748b",letterSpacing:1}}>BPM</span>
+            </div>
+            <Btn onClick={()=>setBpm(Math.min(maxBpm,bpm+5))} style={{minHeight:R.btn.min,minWidth:R.btn.min,padding:"4px 10px",fontSize:R.font.lg,fontWeight:700}}>+</Btn>
+          </div>
+        </div>
+      )}
+      {(onListen||onPractice||onStop)&&(
+        <div style={{display:"flex",flexDirection:"column",gap:R.gap}}>
+          {onListen&&!isPracticing&&(
+            <button onClick={onListen} style={{padding:`${R.ipad?12:9}px ${R.pad}px`,borderRadius:R.rad-2,border:`1.5px solid ${color}`,background:`${color}22`,color,fontFamily:"inherit",fontSize:R.font.sm+1,fontWeight:700,cursor:"pointer",minHeight:R.btn.min,letterSpacing:.5}}>▶ Écouter</button>
+          )}
+          {onPractice&&!isPracticing&&(
+            <button onClick={onPractice} style={{padding:`${R.ipad?12:9}px ${R.pad}px`,borderRadius:R.rad-2,border:"1.5px solid #10b981",background:"#10b98122",color:"#10b981",fontFamily:"inherit",fontSize:R.font.sm+1,fontWeight:700,cursor:"pointer",minHeight:R.btn.min,letterSpacing:.5}}>↻ Pratiquer</button>
+          )}
+          {isPracticing&&onStop&&(
+            <button onClick={onStop} style={{padding:`${R.ipad?12:9}px ${R.pad}px`,borderRadius:R.rad-2,border:"1.5px solid #ef4444",background:"#ef444422",color:"#ef4444",fontFamily:"inherit",fontSize:R.font.sm+1,fontWeight:700,cursor:"pointer",minHeight:R.btn.min,letterSpacing:.5}}>■ Arrêter</button>
+          )}
+        </div>
+      )}
+      {isPracticing&&beat!==undefined&&(
+        <div style={{display:"flex",gap:R.gap,justifyContent:"center",paddingTop:2}}>
+          {[0,1,2,3].map(b=><div key={b} style={{width:11,height:11,borderRadius:"50%",background:b===beat?color:"rgba(255,255,255,.12)",boxShadow:b===beat?`0 0 8px ${color}66`:"none",transition:"all .1s"}}/>)}
+        </div>
+      )}
+      {extra}
+    </div>
+  );
+}
+
 function SeqViz({notes,idx,color,onPlay,onStop,playing,R}){
   return(<div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginTop:R.pad}}>
     <div style={{display:"flex",gap:3,flexWrap:"wrap",marginBottom:R.gap+2}}>
@@ -321,21 +369,24 @@ function SeqViz({notes,idx,color,onPlay,onStop,playing,R}){
   </div>);
 }
 
+// SeqVizCompact : juste l'affichage de la séquence, sans boutons (utilisé quand
+// les boutons sont dans LessonControls dans la colonne droite).
+function SeqVizCompact({notes,idx,color,R}){
+  return(<div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginTop:R.pad}}>
+    <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+      {notes.map((n,i)=>(<div key={i} style={{padding:`${R.ipad?5:3}px ${R.ipad?8:5}px`,borderRadius:R.rad-4,minWidth:R.ipad?36:24,textAlign:"center",
+        background:i===idx?`${color}33`:n.note==="_"?"transparent":"rgba(255,255,255,.04)",
+        border:i===idx?`1px solid ${color}`:"1px solid transparent",transition:"all .1s"}}>
+        <div style={{fontSize:R.font.sm,fontWeight:700,color:n.note==="_"?"#334155":color}}>{n.note==="_"?"·":fr(n.note)}</div>
+        {n.ly&&<div style={{fontSize:R.font.xs,color:"#94a3b8"}}>{n.ly}</div>}</div>))}
+    </div>
+  </div>);
+}
+
 function InputWidget({pitch,midi,expected,R}){
   const[mode,setMode]=useState("off");
   const toggleMic=()=>{if(mode==="midi")midi.stop();if(mode==="mic"){pitch.stop();setMode("off")}else{pitch.start();setMode("mic")}};
   const toggleMidi=()=>{if(mode==="mic")pitch.stop();if(mode==="midi"){midi.stop();setMode("off")}else{midi.start();setMode("midi")}};
-  if(mode==="off") return(
-    <div style={{display:"flex",gap:R.gap,marginBottom:R.pad}}>
-      <button onClick={toggleMic} style={{flex:1,padding:R.pad,borderRadius:R.rad,cursor:"pointer",fontFamily:"inherit",
-        border:"1px dashed #334155",background:"rgba(255,255,255,.02)",color:"#64748b",fontSize:R.font.sm,fontWeight:600,
-        display:"flex",alignItems:"center",justifyContent:"center",gap:8,minHeight:R.btn.min}}>
-        🎤 Micro</button>
-      {midi.supported&&<button onClick={toggleMidi} style={{flex:1,padding:R.pad,borderRadius:R.rad,cursor:"pointer",fontFamily:"inherit",
-        border:"1px dashed #334155",background:"rgba(255,255,255,.02)",color:"#64748b",fontSize:R.font.sm,fontWeight:600,
-        display:"flex",alignItems:"center",justifyContent:"center",gap:8,minHeight:R.btn.min}}>
-        🎹 MIDI</button>}
-    </div>);
   const det=mode==="mic"?pitch.detected:null;
   const midiAct=mode==="midi"?Array.from(midi.activeNotes):[];
   const lastM=midiAct.length>0?midiAct[midiAct.length-1]:null;
@@ -343,6 +394,53 @@ function InputWidget({pitch,midi,expected,R}){
   const dispRaw=mode==="mic"?det?.note:lastM;
   const match=dispRaw&&expected&&dispRaw===expected;
   const close=dispRaw&&expected&&!match&&dispRaw.replace(/\d/,"")===expected.replace(/\d/,"");
+
+  // ─── Variante compacte (paysage) : intégrée dans le header ───
+  if(R.landscape){
+    if(mode==="off"){
+      return(
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          <button onClick={toggleMic} title="Activer le micro" style={{padding:"6px 12px",borderRadius:R.rad-2,fontFamily:"inherit",fontSize:R.font.xs+1,fontWeight:600,cursor:"pointer",minHeight:32,
+            border:"1px dashed #475569",background:"rgba(255,255,255,.03)",color:"#cbd5e1",display:"flex",alignItems:"center",gap:5}}>🎤 Micro</button>
+          {midi.supported&&<button onClick={toggleMidi} title="Activer le MIDI" style={{padding:"6px 12px",borderRadius:R.rad-2,fontFamily:"inherit",fontSize:R.font.xs+1,fontWeight:600,cursor:"pointer",minHeight:32,
+            border:"1px dashed #475569",background:"rgba(255,255,255,.03)",color:"#cbd5e1",display:"flex",alignItems:"center",gap:5}}>🎹 MIDI</button>}
+        </div>);
+    }
+    // Mode actif : 1 ligne compacte avec note détectée + attendue + état
+    return(
+      <div style={{display:"flex",alignItems:"center",gap:R.gap+2,padding:"5px 10px",borderRadius:R.rad-2,
+        background:match?"rgba(34,197,94,.12)":dispNote?"rgba(251,191,36,.08)":"rgba(255,255,255,.04)",
+        border:match?"1px solid rgba(34,197,94,.4)":dispNote?"1px solid rgba(251,191,36,.25)":"1px solid rgba(255,255,255,.1)",minHeight:32}}>
+        <div style={{width:7,height:7,borderRadius:"50%",background:"#22c55e",boxShadow:"0 0 6px rgba(34,197,94,.6)",animation:"pulse 1.5s infinite",flexShrink:0}}/>
+        <span style={{fontSize:R.font.xs,color:"#94a3b8",fontWeight:600}}>{mode==="mic"?"🎤":"🎹"}</span>
+        {expected&&(
+          <div style={{display:"flex",alignItems:"center",gap:5}}>
+            <span style={{fontSize:R.font.xs,color:"#64748b"}}>attendu</span>
+            <span style={{fontSize:R.font.sm+1,fontWeight:700,color:"#818cf8"}}>{fr(expected)}</span>
+          </div>
+        )}
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <span style={{fontSize:R.font.xs,color:"#64748b"}}>joué</span>
+          <span style={{fontSize:R.font.sm+1,fontWeight:700,color:dispNote?(match?"#22c55e":close?"#fbbf24":"#f87171"):"#475569",minWidth:24,textAlign:"center"}}>{dispNote||"–"}</span>
+          {dispNote&&expected&&<span style={{fontSize:R.font.sm}}>{match?"✓":close?"≈":"✗"}</span>}
+        </div>
+        <button onClick={()=>{if(mode==="mic")pitch.stop();if(mode==="midi")midi.stop();setMode("off")}} style={{marginLeft:4,padding:"3px 8px",borderRadius:R.rad-4,fontFamily:"inherit",fontSize:R.font.xs,fontWeight:600,cursor:"pointer",
+          border:"1px solid #334155",background:"transparent",color:"#94a3b8",minHeight:26}}>×</button>
+      </div>);
+  }
+
+  // ─── Variante portrait (panneau complet, comme avant) ───
+  if(mode==="off") return(
+    <div style={{display:"flex",gap:R.gap,marginBottom:R.pad}}>
+      <button onClick={toggleMic} style={{flex:1,padding:R.pad,borderRadius:R.rad,cursor:"pointer",fontFamily:"inherit",
+        border:"1px dashed #334155",background:"rgba(255,255,255,.02)",color:"#94a3b8",fontSize:R.font.sm,fontWeight:600,
+        display:"flex",alignItems:"center",justifyContent:"center",gap:8,minHeight:R.btn.min}}>
+        🎤 Micro</button>
+      {midi.supported&&<button onClick={toggleMidi} style={{flex:1,padding:R.pad,borderRadius:R.rad,cursor:"pointer",fontFamily:"inherit",
+        border:"1px dashed #334155",background:"rgba(255,255,255,.02)",color:"#94a3b8",fontSize:R.font.sm,fontWeight:600,
+        display:"flex",alignItems:"center",justifyContent:"center",gap:8,minHeight:R.btn.min}}>
+        🎹 MIDI</button>}
+    </div>);
   return(
     <div style={{padding:R.pad,borderRadius:R.rad,marginBottom:R.pad,transition:"all .2s",
       background:match?"rgba(34,197,94,.1)":dispNote?"rgba(251,191,36,.06)":"rgba(255,255,255,.03)",
@@ -350,7 +448,7 @@ function InputWidget({pitch,midi,expected,R}){
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:R.gap+2}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <div style={{width:8,height:8,borderRadius:"50%",background:"#22c55e",boxShadow:"0 0 6px rgba(34,197,94,.6)",animation:"pulse 1.5s infinite"}}/>
-          <span style={{fontSize:R.font.xs,color:"#64748b"}}>{mode==="mic"?"Micro actif":midi.connected?`MIDI : ${midi.deviceName}`:"MIDI : en attente..."}</span></div>
+          <span style={{fontSize:R.font.xs,color:"#94a3b8"}}>{mode==="mic"?"Micro actif":midi.connected?`MIDI : ${midi.deviceName}`:"MIDI : en attente..."}</span></div>
         <div style={{display:"flex",gap:4}}>
           {mode==="mic"&&midi.supported&&<Btn onClick={()=>{pitch.stop();midi.start();setMode("midi")}} style={{fontSize:R.font.xs,padding:"3px 10px"}}>→ MIDI</Btn>}
           {mode==="midi"&&<Btn onClick={()=>{midi.stop();pitch.start();setMode("mic")}} style={{fontSize:R.font.xs,padding:"3px 10px"}}>→ Micro</Btn>}
@@ -370,6 +468,18 @@ function InputWidget({pitch,midi,expected,R}){
       {midi.error&&<div style={{fontSize:R.font.xs,color:"#ef4444",textAlign:"center",marginTop:6}}>{midi.error}</div>}
       {pitch.micError&&<div style={{fontSize:R.font.xs,color:"#ef4444",textAlign:"center",marginTop:6}}>{pitch.micError}</div>}
     </div>);
+}
+
+/* ───────────────────────────────────────────────────────────────────
+   useSlots : helper pour pousser top (header right) et side (sidebar)
+   depuis une leçon. Le cleanup utilise un updater fonctionnel pour ne
+   nettoyer QUE si le slot contient encore notre JSX (sinon une leçon
+   qui se démonte effacerait les slots de la suivante).
+   ─────────────────────────────────────────────────────────────────── */
+function useSlots(top,side){
+  const{setTop,setSide}=useContext(SlotsCtx);
+  useEffect(()=>{setTop(top);return()=>setTop(p=>p===top?null:p)},[top,setTop]);
+  useEffect(()=>{setSide(side);return()=>setSide(p=>p===side?null:p)},[side,setSide]);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -407,17 +517,22 @@ function L1({song,R,...inp}){
   useInterval(()=>{setBt(b=>{if(b+1>=4){setCi(c=>{const n=(c+1)%song.chords.length;ciRef.current=n;return n});return 0}return b+1})},60/bpm*1000,looping);
   useEffect(()=>{if(looping&&bt===0)a.chord(song.chords[ciRef.current].keys)},[bt,looping]);
 
+  const onListen=()=>{a.unlock();a.chord(ch.keys);setPr(new Set(ch.keys));setTimeout(()=>setPr(new Set()),500)};
+  const onPractice=()=>{a.unlock();setLoop(true);setCi(0);ciRef.current=0;setBt(0)};
+  const onStop=()=>setLoop(false);
+
+  const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>,[pitch,midi,ch.keys,R]);
+  const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={looping} beat={bt}/>,[R,ch.color,bpm,looping,bt]);
+  useSlots(top,side);
+
   return(<div>
-    <InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>
     <ChordBtns chords={song.chords} ci={ci} setCi={setCi} unlock={a.unlock} R={R}/>
     <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,background:`${ch.color}11`,borderRadius:R.rad,border:`1px solid ${ch.color}33`}}>
       <div style={{fontSize:R.font.sm,color:"#94a3b8",marginBottom:R.gap}}>Main gauche : plaque ces 3 notes</div>
       <div style={{display:"flex",justifyContent:"center",gap:R.ipad?24:18}}>
         {ch.keys.map(k=><div key={k} style={{textAlign:"center"}}><div style={{fontSize:R.font.xl,fontWeight:700,color:ch.color}}>{fr(k)}</div><div style={{fontSize:R.font.xs,color:"#64748b"}}>doigt {ch.fingers[k]}</div></div>)}</div>
-      <Btn onClick={()=>{a.unlock();a.chord(ch.keys);setPr(new Set(ch.keys));setTimeout(()=>setPr(new Set()),500)}} style={{margin:`${R.gap+2}px auto 0`,border:`1px solid ${ch.color}55`,background:`${ch.color}22`,color:ch.color,padding:"6px 18px"}}>▶ Écouter</Btn>
     </div>
     <Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
-    <div style={{marginTop:R.pad}}><BpmCtrl bpm={bpm} setBpm={setBpm} running={looping} beat={bt} color={ch.color} R={R} toggle={()=>{a.unlock();setLoop(!looping);if(!looping){setCi(0);setBt(0)}}}/></div>
   </div>);
 }
 
@@ -443,43 +558,54 @@ function L2({song,R,...inp}){
     return()=>clearInterval(id)}setBt(0);setIdx(-1);setPr(new Set())},[looping,bpm]);
   useEffect(()=>()=>clearInterval(arRef.current),[]);
 
+  const onListen=()=>{stopArp();playArp()};
+  const onPractice=()=>{a.unlock();stopArp();setCi(0);ciRef.current=0;setBt(0);setLoop(true)};
+  const onStop=()=>{stopArp();setLoop(false)};
+
+  const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.arp[idx>=0?idx:0]} R={R}/>,[pitch,midi,ch.arp,idx,R]);
+  const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={looping||arpPlaying} beat={looping?bt:undefined}/>,[R,ch.color,bpm,looping,arpPlaying,bt]);
+  useSlots(top,side);
+
   return(<div>
-    <InputWidget pitch={pitch} midi={midi} expected={ch.arp[idx>=0?idx:0]} R={R}/>
     <ChordBtns chords={song.chords} ci={ci} setCi={i=>{setCi(i);ciRef.current=i;stopArp()}} unlock={a.unlock} R={R}/>
     <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,background:`${ch.color}11`,borderRadius:R.rad,border:`1px solid ${ch.color}33`}}>
       <div style={{fontSize:R.font.sm,color:"#94a3b8",marginBottom:R.gap}}>Pattern : bas → milieu → haut → milieu</div>
       <div style={{display:"flex",justifyContent:"center",gap:R.gap}}>
         {ch.arp.slice(0,4).map((n,i)=><div key={i} style={{padding:`${R.ipad?6:4}px ${R.ipad?12:8}px`,borderRadius:R.rad-4,background:i===idx%4?`${ch.color}33`:"rgba(255,255,255,.05)",border:i===idx%4?`1px solid ${ch.color}`:"1px solid transparent"}}>
           <div style={{fontSize:R.font.lg,fontWeight:700,color:ch.color}}>{fr(n)}</div></div>)}</div>
-      <div style={{display:"flex",gap:R.gap,justifyContent:"center",marginTop:R.gap+2}}>
-        <Btn onClick={()=>{stopArp();playArp()}} style={{border:`1px solid ${ch.color}55`,background:`${ch.color}22`,color:ch.color,padding:"6px 18px"}}>▶ Écouter</Btn>
-        {arpPlaying&&<Btn onClick={stopArp} style={{padding:"6px 14px"}}>■ Stop</Btn>}
-      </div>
     </div>
     <Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
-    <div style={{marginTop:R.pad}}><BpmCtrl bpm={bpm} setBpm={setBpm} running={looping} beat={bt} color={ch.color} R={R} toggle={()=>{a.unlock();stopArp();setLoop(!looping);if(!looping){setCi(0);ciRef.current=0;setBt(0)}}}/></div>
   </div>);
 }
 
 // L3 — Intro riff
 function L3({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
-  const[idx,setIdx]=useState(-1);const[pr,setPr]=useState(new Set());const[playing,setP]=useState(false);const r=useRef(null);
+  const[idx,setIdx]=useState(-1);const[pr,setPr]=useState(new Set());const[playing,setP]=useState(false);const[loopMode,setLoopMode]=useState(false);
+  const r=useRef(null);const loopRef=useRef(false);
   const cur=song.riff[idx>=0?idx:0]?.note;
-  const play=()=>{a.unlock();let i=0;const step=60/65*1000*.5;clearInterval(r.current);setP(true);
-    r.current=setInterval(()=>{if(i>=song.riff.length){clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false);return}
+
+  const playOnce=()=>{a.unlock();loopRef.current=false;setLoopMode(false);let i=0;const step=60/65*1000*.5;clearInterval(r.current);setP(true);
+    r.current=setInterval(()=>{if(i>=song.riff.length){
+        if(loopRef.current){i=0}else{clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false);return}
+      }
       const n=song.riff[i];setIdx(i);if(n.note!=="_"){a.note(n.note,.35);setPr(new Set([n.note]))}else setPr(new Set());i++},step)};
-  const stop=()=>{clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false)};
+  const playLoop=()=>{a.unlock();loopRef.current=true;setLoopMode(true);playOnce();loopRef.current=true};
+  const stop=()=>{loopRef.current=false;clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false);setLoopMode(false)};
   useEffect(()=>()=>clearInterval(r.current),[]);
+
+  const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={cur!=="_"?cur:null} R={R}/>,[pitch,midi,cur,R]);
+  const side=useMemo(()=><LessonControls R={R} color="#f87171" onListen={playOnce} onPractice={playLoop} onStop={stop} isPracticing={playing}/>,[R,playing]);
+  useSlots(top,side);
+
   return(<div>
-    <InputWidget pitch={pitch} midi={midi} expected={cur!=="_"?cur:null} R={R}/>
     <div style={{padding:R.pad,marginBottom:R.pad,borderRadius:R.rad,background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.2)"}}>
       <div style={{fontSize:R.font.sm+1,color:"#f87171",marginBottom:R.gap,fontWeight:600}}>Main droite : riff signature</div>
       <div style={{display:"flex",justifyContent:"center",gap:R.ipad?18:14}}>
         {song.riffNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg+2,fontWeight:700,color:"#f87171"}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#fb923c"}}>doigt {song.melFingers[n]}</div></div>)}</div>
     </div>
     <Piano keys={song.keys} hl={new Set(song.riffNotes)} fm={song.melFingers} hands={handsOf(song.riffNotes,"R")} c1="#f87171" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
-    <SeqViz notes={song.riff} idx={idx} color="#f87171" onPlay={play} onStop={stop} playing={playing} R={R}/>
+    <SeqVizCompact notes={song.riff} idx={idx} color="#f87171" R={R}/>
   </div>);
 }
 
@@ -488,23 +614,32 @@ function L4({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
   const secs=Object.keys(song.melody);
   const[sec,setSec]=useState(secs[0]);const[idx,setIdx]=useState(-1);const[pr,setPr]=useState(new Set());const[playing,setP]=useState(false);
-  const r=useRef(null);const m=song.melody[sec];const cur=m.notes[idx>=0?idx:0]?.note;
-  const play=()=>{a.unlock();let i=0;const step=60/70*1000*.5;clearInterval(r.current);setP(true);
-    r.current=setInterval(()=>{if(i>=m.notes.length){clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false);return}
+  const r=useRef(null);const loopRef=useRef(false);
+  const m=song.melody[sec];const cur=m.notes[idx>=0?idx:0]?.note;
+
+  const playOnce=()=>{a.unlock();loopRef.current=false;let i=0;const step=60/70*1000*.5;clearInterval(r.current);setP(true);
+    r.current=setInterval(()=>{if(i>=m.notes.length){
+        if(loopRef.current){i=0}else{clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false);return}
+      }
       const n=m.notes[i];setIdx(i);if(n.note!=="_"){a.note(n.note,.35);setPr(new Set([n.note]))}else setPr(new Set());i++},step)};
-  const stop=()=>{clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false)};
+  const playLoop=()=>{loopRef.current=true;playOnce();loopRef.current=true};
+  const stop=()=>{loopRef.current=false;clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false)};
   useEffect(()=>()=>clearInterval(r.current),[]);
+
+  const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={cur!=="_"?cur:null} R={R}/>,[pitch,midi,cur,R]);
+  const side=useMemo(()=><LessonControls R={R} color="#e879f9" onListen={playOnce} onPractice={playLoop} onStop={stop} isPracticing={playing}/>,[R,playing]);
+  useSlots(top,side);
+
   return(<div>
-    <InputWidget pitch={pitch} midi={midi} expected={cur!=="_"?cur:null} R={R}/>
     <div style={{display:"flex",gap:R.gap+2,justifyContent:"center",marginBottom:R.pad}}>
-      {secs.map(k=><button key={k} onClick={()=>{setSec(k);setIdx(-1);stop()}} style={{padding:`${R.ipad?10:7}px ${R.ipad?20:16}px`,borderRadius:R.rad,fontSize:R.font.sm+1,fontFamily:"inherit",fontWeight:600,minHeight:R.btn.min,border:sec===k?"1px solid #e879f9":"1px solid #334155",background:sec===k?"#e879f922":"transparent",color:sec===k?"#e879f9":"#64748b",cursor:"pointer"}}>{song.melody[k].label}</button>)}</div>
+      {secs.map(k=><button key={k} onClick={()=>{setSec(k);setIdx(-1);stop()}} style={{padding:`${R.ipad?10:7}px ${R.ipad?20:16}px`,borderRadius:R.rad,fontSize:R.font.sm+1,fontFamily:"inherit",fontWeight:600,minHeight:R.btn.min,border:sec===k?"1px solid #e879f9":"1px solid #334155",background:sec===k?"#e879f922":"transparent",color:sec===k?"#e879f9":"#94a3b8",cursor:"pointer"}}>{song.melody[k].label}</button>)}</div>
     <div style={{padding:R.pad,marginBottom:R.pad,borderRadius:R.rad,background:"rgba(232,121,249,.06)",border:"1px solid rgba(232,121,249,.2)"}}>
       <div style={{fontSize:R.font.sm+1,color:"#c084fc",marginBottom:R.gap,fontWeight:600}}>Main droite</div>
       <div style={{display:"flex",justifyContent:"center",gap:R.ipad?18:14}}>
         {song.melodyNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg,fontWeight:700,color:"#e879f9"}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#a78bfa"}}>doigt {song.melFingers[n]}</div></div>)}</div>
     </div>
     <Piano keys={song.keys} hl={new Set(song.melodyNotes)} fm={song.melFingers} hands={handsOf(song.melodyNotes,"R")} c1="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
-    <SeqViz notes={m.notes} idx={idx} color="#e879f9" onPlay={play} onStop={stop} playing={playing} R={R}/>
+    <SeqVizCompact notes={m.notes} idx={idx} color="#e879f9" R={R}/>
   </div>);
 }
 
@@ -512,6 +647,7 @@ function L4({song,R,...inp}){
 function L5({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
   const[ci,setCi]=useState(0);const[step,setStep]=useState(0);const[pr,setPr]=useState(new Set());
+  const[playingAll,setPlayingAll]=useState(false);const seqRef=useRef(null);
   const ch=song.chords[ci];const melN=song.melPerChord[ci];
   const steps=[{t:"chord",l:`Plaque ${ch.name}`,k:ch.keys,hand:"L"},...melN.map((n,i)=>({t:"note",l:`Note ${i+1} : ${fr(n)}`,k:[n],hand:"R"}))];
   const cur=steps[Math.min(step,steps.length-1)];const mf={...ch.fingers,...song.melFingers};
@@ -519,9 +655,33 @@ function L5({song,R,...inp}){
   const handsCombined=mergeHands(handsOf(ch.keys,"L"),handsOf(melN,"R"));
   const handLabel=cur.hand==="L"?"Main gauche":"Main droite";
   const handColor=cur.hand==="L"?ch.color:"#e879f9";
+
+  // "Écouter cette étape" : joue uniquement l'étape courante
+  const playStep=()=>{a.unlock();if(cur.t==="chord")a.chord(cur.k);else cur.k.forEach(n=>a.note(n));setPr(new Set(cur.k));setTimeout(()=>setPr(new Set()),400)};
+  // "Tout écouter" : enchaîne accord + 4 notes mélodie en séquence
+  const playAll=()=>{a.unlock();clearInterval(seqRef.current);setPlayingAll(true);
+    let i=0;const stepMs=600;
+    // Frappe immédiatement le premier
+    setStep(0);a.chord(steps[0].k);setPr(new Set(steps[0].k));
+    seqRef.current=setInterval(()=>{i++;if(i>=steps.length){clearInterval(seqRef.current);setPlayingAll(false);setPr(new Set());return}
+      setStep(i);const s=steps[i];if(s.t==="chord")a.chord(s.k);else s.k.forEach(n=>a.note(n));setPr(new Set(s.k));setTimeout(()=>setPr(new Set()),350)},stepMs)};
+  const stopAll=()=>{clearInterval(seqRef.current);setPlayingAll(false);setPr(new Set())};
+  useEffect(()=>()=>clearInterval(seqRef.current),[]);
+
+  const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={cur.k[0]} R={R}/>,[pitch,midi,cur.k,R]);
+  const side=useMemo(()=><LessonControls R={R} color={handColor} onListen={playStep} onPractice={playAll} onStop={stopAll} isPracticing={playingAll}
+    extra={
+      <div style={{padding:`${R.gap+2}px ${R.gap+4}px`,borderRadius:R.rad-4,background:"rgba(255,255,255,.03)",fontSize:R.font.xs+1,color:"#94a3b8",lineHeight:1.6,textAlign:"center"}}>
+        <span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:ch.color,verticalAlign:"middle",marginRight:5}}/><b style={{color:ch.color}}>G</b> main gauche
+        <span style={{margin:"0 10px",color:"#475569"}}>•</span>
+        <span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:"#e879f9",verticalAlign:"middle",marginRight:5}}/><b style={{color:"#e879f9"}}>D</b> main droite
+      </div>
+    }
+  />,[R,handColor,playingAll,ch.color]);
+  useSlots(top,side);
+
   return(<div>
-    <InputWidget pitch={pitch} midi={midi} expected={cur.k[0]} R={R}/>
-    <ChordBtns chords={song.chords} ci={ci} setCi={i=>{setCi(i);setStep(0)}} unlock={a.unlock} R={R}/>
+    <ChordBtns chords={song.chords} ci={ci} setCi={i=>{setCi(i);setStep(0);stopAll()}} unlock={a.unlock} R={R}/>
     <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.08)"}}>
       {/* Indicateur GRAND de la main active à cette étape */}
       <div style={{display:"inline-flex",alignItems:"center",gap:R.gap+2,padding:`${R.ipad?6:4}px ${R.pad}px`,borderRadius:R.rad,
@@ -534,16 +694,11 @@ function L5({song,R,...inp}){
           background:i===step?(s.hand==="L"?ch.color:"#e879f9"):i<step?"#10b981":"rgba(255,255,255,.1)"}}/>)}</div>
       <div style={{fontSize:R.font.md,fontWeight:700,color:"#e2e8f0"}}>{cur.l}</div>
       <div style={{display:"flex",gap:R.gap,justifyContent:"center",marginTop:R.gap+2}}>
-        <Btn onClick={()=>setStep(Math.max(0,step-1))} style={{opacity:step===0?.3:1}}>←</Btn>
-        <Btn onClick={()=>{a.unlock();if(cur.t==="chord")a.chord(cur.k);else cur.k.forEach(n=>a.note(n));setPr(new Set(cur.k));setTimeout(()=>setPr(new Set()),400)}} style={{color:"#10b981",borderColor:"#10b98155"}}>▶</Btn>
-        <Btn onClick={()=>setStep(Math.min(steps.length-1,step+1))} style={{opacity:step>=steps.length-1?.3:1}}>→</Btn>
+        <Btn onClick={()=>setStep(Math.max(0,step-1))} style={{opacity:step===0?.3:1}}>← Précédent</Btn>
+        <Btn onClick={()=>setStep(Math.min(steps.length-1,step+1))} style={{opacity:step>=steps.length-1?.3:1}}>Suivant →</Btn>
       </div>
     </div>
     <Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mf} hands={handsCombined} c1={ch.color} c2="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
-    <div style={{padding:`${R.gap+2}px ${R.pad}px`,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginTop:R.gap+2,fontSize:R.font.xs+1,color:"#94a3b8",lineHeight:1.5,textAlign:"center"}}>
-      <span style={{display:"inline-block",width:14,height:14,borderRadius:3,background:ch.color,verticalAlign:"middle",marginRight:5}}/><b style={{color:ch.color}}>G</b> = main gauche
-      <span style={{margin:"0 14px",color:"#475569"}}>•</span>
-      <span style={{display:"inline-block",width:14,height:14,borderRadius:3,background:"#e879f9",verticalAlign:"middle",marginRight:5}}/><b style={{color:"#e879f9"}}>D</b> = main droite</div>
   </div>);
 }
 
@@ -551,17 +706,38 @@ function L5({song,R,...inp}){
 function L6({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
   const[bpm,setBpm]=useState(70);const[run,setRun]=useState(false);const[ci,setCi]=useState(0);const[bt,setBt]=useState(0);const[pr,setPr]=useState(new Set());
+  const[listenOnce,setListenOnce]=useState(false);
   const ciRef=useRef(0);useEffect(()=>{ciRef.current=ci},[ci]);const ch=song.chords[ci];
-  useInterval(()=>{setBt(b=>{if(b+1>=4){setCi(c=>{const n=(c+1)%song.chords.length;ciRef.current=n;return n});return 0}return b+1})},60/bpm*1000,run);
+
+  useInterval(()=>{setBt(b=>{if(b+1>=4){
+      setCi(c=>{
+        const n=(c+1)%song.chords.length;ciRef.current=n;
+        // Si "Écouter" (1 cycle) : on s'arrête en revenant au début
+        if(listenOnce&&n===0){setRun(false);setListenOnce(false)}
+        return n;
+      });return 0}return b+1})},60/bpm*1000,run);
   useEffect(()=>{if(run&&bt===0){a.chord(song.chords[ciRef.current].keys);setPr(new Set(song.chords[ciRef.current].keys));setTimeout(()=>setPr(new Set()),200)}},[bt,run]);
   const pct=bpm>=song.bpm?100:Math.round((bpm-40)/(song.bpm-40)*100);
+
+  const onListen=()=>{a.unlock();setCi(0);ciRef.current=0;setBt(0);setListenOnce(true);setRun(true)};
+  const onPractice=()=>{a.unlock();setCi(0);ciRef.current=0;setBt(0);setListenOnce(false);setRun(true)};
+  const onStop=()=>{setRun(false);setListenOnce(false)};
+
+  const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>,[pitch,midi,ch.keys,R]);
+  const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={run} beat={bt}
+    extra={
+      <div>
+        <div style={{fontSize:R.font.xs,color:"#64748b",letterSpacing:1.5,textTransform:"uppercase",marginBottom:R.gap-2,fontWeight:600}}>Objectif {song.bpm} bpm</div>
+        <div style={{height:6,borderRadius:3,background:"rgba(255,255,255,.08)",overflow:"hidden"}}>
+          <div style={{height:"100%",width:`${pct}%`,borderRadius:3,background:pct>=100?"linear-gradient(90deg,#10b981,#34d399)":"linear-gradient(90deg,#f59e0b,#fbbf24)",transition:"width .3s"}}/>
+        </div>
+        <div style={{fontSize:R.font.xs,color:pct>=100?"#34d399":"#fbbf24",marginTop:4,textAlign:"right",fontWeight:600}}>{pct}%</div>
+      </div>
+    }
+  />,[R,ch.color,bpm,run,bt,pct,song.bpm]);
+  useSlots(top,side);
+
   return(<div>
-    <InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>
-    <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)"}}>
-      <div style={{fontSize:R.font.sm,color:"#64748b",marginBottom:R.gap}}>Objectif : {song.bpm} bpm</div>
-      <div style={{height:R.ipad?8:6,borderRadius:4,background:"rgba(255,255,255,.08)",overflow:"hidden",marginBottom:R.pad}}>
-        <div style={{height:"100%",width:`${pct}%`,borderRadius:4,background:pct>=100?"linear-gradient(90deg,#10b981,#34d399)":"linear-gradient(90deg,#f59e0b,#fbbf24)",transition:"width .3s"}}/></div>
-      <BpmCtrl bpm={bpm} setBpm={setBpm} running={run} beat={bt} color={ch.color} R={R} toggle={()=>{a.unlock();setRun(!run);if(!run){setCi(0);ciRef.current=0;setBt(0)}}}/></div>
     <Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
     <ProgBar chords={song.chords} ci={ci} R={R}/>
   </div>);
@@ -597,30 +773,36 @@ function L7({song,R,...inp}){
   };
   const finished=!run&&state.current.si>=song.structure.length;
 
+  const onPractice=()=>{a.unlock();reset();setTimeout(()=>setRun(true),0)};
+  const onStop=()=>setRun(false);
+
+  const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>,[pitch,midi,ch.keys,R]);
+  const side=useMemo(()=><LessonControls R={R} color={ch.color} onPractice={onPractice} onStop={onStop} isPracticing={run} beat={display.bt}
+    extra={
+      <>
+        {!run&&display.si>0&&!finished&&<button onClick={reset} style={{padding:`${R.ipad?10:8}px ${R.pad}px`,borderRadius:R.rad-2,border:"1px solid #334155",background:"transparent",color:"#94a3b8",fontFamily:"inherit",fontSize:R.font.sm,fontWeight:600,cursor:"pointer",minHeight:R.btn.min}}>↺ Reprendre du début</button>}
+        {finished&&<div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(16,185,129,.08)",border:"1px solid rgba(16,185,129,.3)",textAlign:"center"}}>
+          <div style={{fontSize:R.font.md,fontWeight:700,color:"#34d399"}}>Pari gagné.</div>
+          <div style={{fontSize:R.font.xs+1,color:"#64748b",marginTop:4}}>{song.title} à {song.bpm} bpm.</div></div>}
+      </>
+    }
+  />,[R,ch.color,run,display.bt,display.si,finished,song.title,song.bpm]);
+  useSlots(top,side);
+
   return(<div>
-    <InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>
     <div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginBottom:R.pad}}>
-      <div style={{fontSize:R.font.sm,color:"#64748b",marginBottom:R.gap,fontWeight:600}}>Structure (tape pour démarrer ici)</div>
+      <div style={{fontSize:R.font.xs,color:"#64748b",letterSpacing:1.5,textTransform:"uppercase",marginBottom:R.gap,fontWeight:600}}>Structure de la chanson</div>
+      <div style={{fontSize:R.font.xs,color:"#94a3b8",marginBottom:R.gap+2,fontStyle:"italic"}}>Tape une section pour démarrer ici</div>
       <div style={{display:"flex",gap:R.ipad?5:3,flexWrap:"wrap"}}>
         {song.structure.map((s,i)=><button key={i} onClick={()=>jumpTo(i)} style={{
           padding:`${R.ipad?7:5}px ${R.ipad?14:10}px`,borderRadius:R.rad-4,fontSize:R.font.sm,fontWeight:600,fontFamily:"inherit",cursor:"pointer",minHeight:R.btn.min,
           background:i===display.si?"#6366f122":"rgba(255,255,255,.03)",
-          border:i===display.si?"1px solid #6366f1":"1px solid rgba(255,255,255,.06)",
-          color:i===display.si?"#818cf8":i<display.si?"#10b981":"#94a3b8",
+          border:i===display.si?"1px solid #6366f1":"1px solid rgba(255,255,255,.08)",
+          color:i===display.si?"#818cf8":i<display.si?"#34d399":"#cbd5e1",
           transition:"all .15s"
         }}>{i<display.si&&"✓ "}{s.label}</button>)}</div></div>
     <Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
     <ProgBar chords={song.chords} ci={display.ci} R={R}/>
-    <div style={{display:"flex",justifyContent:"center",gap:R.gap*2,marginTop:R.pad}}>
-      <button onClick={()=>{a.unlock();if(!run){reset();setRun(true)}else setRun(false)}} style={{
-        padding:`${R.ipad?14:10}px ${R.ipad?32:24}px`,borderRadius:R.rad,fontSize:R.font.sm+1,fontFamily:"inherit",fontWeight:700,cursor:"pointer",minHeight:R.btn.min,
-        border:`2px solid ${run?"#ef4444":"#10b981"}`,background:run?"#ef444422":"#10b98122",color:run?"#ef4444":"#10b981"}}>{run?"■ Arrêter":"▶ Depuis le début"}</button>
-      {!run&&display.si>0&&!finished&&<Btn onClick={reset} style={{padding:"10px 16px"}}>↺</Btn>}</div>
-    {run&&<div style={{display:"flex",gap:R.gap,justifyContent:"center",marginTop:R.gap+2}}>
-      {[0,1,2,3].map(b=><div key={b} style={{width:R.ipad?14:10,height:R.ipad?14:10,borderRadius:"50%",background:b===display.bt?ch.color:"rgba(255,255,255,.1)",boxShadow:b===display.bt?`0 0 8px ${ch.color}66`:"none"}}/>)}</div>}
-    {finished&&<div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(16,185,129,.08)",border:"1px solid rgba(16,185,129,.3)",textAlign:"center",marginTop:R.pad}}>
-      <div style={{fontSize:R.font.md+2,fontWeight:700,color:"#34d399"}}>Pari gagné.</div>
-      <div style={{fontSize:R.font.sm,color:"#64748b",marginTop:4}}>Tu viens de jouer {song.title} au complet à {song.bpm} bpm.</div></div>}
   </div>);
 }
 
@@ -666,6 +848,10 @@ export default function PianoTutor(){
   const au=useAudio();const pitch=usePitch();const midi=useMIDI();const R=useResponsive();
   const song=SONGS[songId];const L=song.lessons[les];
   const[detNote,setDetNote]=useState(null);const dt=useRef();
+  // Slots : top (header right) et side (sous le tip dans la colonne droite)
+  const[topJsx,setTopJsx]=useState(null);
+  const[sideJsx,setSideJsx]=useState(null);
+  const slotsValue=useMemo(()=>({setTop:setTopJsx,setSide:setSideJsx,has:true}),[]);
 
   useEffect(()=>{pitch.onNote(n=>{setDetNote(n);clearTimeout(dt.current);dt.current=setTimeout(()=>setDetNote(null),400)})},[pitch.onNote]);
   useEffect(()=>{midi.onNote((n,t)=>{if(t==="on"){setDetNote(n);clearTimeout(dt.current);dt.current=setTimeout(()=>setDetNote(null),600)}})},[midi.onNote]);
@@ -673,7 +859,11 @@ export default function PianoTutor(){
   const tog=i=>setDone(p=>{const s=new Set(p);const k=`${songId}-${les}-${i}`;s.has(k)?s.delete(k):s.add(k);return s});
   const LessonComp=LESSON_COMPONENTS[les];
 
-  // Bloc d'en-tête de leçon (objectifs + tip), réutilisé en portrait et en paysage
+  // Couleur de l'accent de la leçon active (utilisée pour onglet sélectionné)
+  const lessonColors=["#6366f1","#06b6d4","#f87171","#e879f9","#10b981","#f59e0b","#a855f7"];
+  const lesColor=lessonColors[les]||"#6366f1";
+
+  // Bloc d'en-tête de leçon (objectifs + tip)
   const lessonHeader=(
     <div style={{padding:R.landscape?R.gap+4:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginBottom:R.landscape?0:R.pad}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
@@ -682,27 +872,26 @@ export default function PianoTutor(){
       <div style={{marginTop:R.gap}}>
         {L.goals.map((g,i)=>{const d=done.has(`${songId}-${les}-${i}`);return(
           <div key={i} onClick={()=>tog(i)} style={{display:"flex",alignItems:"center",gap:R.gap,padding:`${R.landscape?2:(R.ipad?5:3)}px 0`,cursor:"pointer"}}>
-            <div style={{width:R.landscape?14:(R.ipad?18:14),height:R.landscape?14:(R.ipad?18:14),borderRadius:4,flexShrink:0,border:d?"none":"1px solid #334155",background:d?"#10b981":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:R.font.xs,color:"#fff"}}>{d&&"✓"}</div>
-            <div style={{fontSize:R.landscape?R.font.xs+1:R.font.sm,color:d?"#64748b":"#94a3b8",textDecoration:d?"line-through":"none",lineHeight:1.3}}>{g}</div></div>)})}</div>
-      <div style={{marginTop:R.gap,padding:`${R.landscape?5:(R.ipad?8:5)}px ${R.gap+4}px`,borderRadius:R.rad-4,background:"rgba(251,191,36,.06)",border:"1px solid rgba(251,191,36,.15)",fontSize:R.landscape?R.font.xs+1:R.font.sm,color:"#fbbf24",lineHeight:1.5}}>{L.tip}</div>
+            <div style={{width:R.landscape?16:(R.ipad?18:14),height:R.landscape?16:(R.ipad?18:14),borderRadius:4,flexShrink:0,border:d?"none":"1.5px solid #475569",background:d?"#10b981":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:R.font.xs,color:"#fff"}}>{d&&"✓"}</div>
+            <div style={{fontSize:R.landscape?R.font.xs+1:R.font.sm,color:d?"#64748b":"#cbd5e1",textDecoration:d?"line-through":"none",lineHeight:1.3}}>{g}</div></div>)})}</div>
+      <div style={{marginTop:R.gap+2,padding:`${R.landscape?6:(R.ipad?8:5)}px ${R.gap+4}px`,borderRadius:R.rad-4,background:"rgba(251,191,36,.08)",border:"1px solid rgba(251,191,36,.2)",fontSize:R.landscape?R.font.xs+1:R.font.sm,color:"#fcd34d",lineHeight:1.5}}>{L.tip}</div>
     </div>);
 
   // Bloc de leçon active (key force le remount = nettoie tous les intervals)
   const lessonContent=<LessonComp key={`${songId}-${les}`} song={song} R={R} a={au} pitch={pitch} midi={midi} detNote={detNote} midiNotes={midi.activeNotes}/>;
 
-  // En paysage, on calcule le padding-bottom de la zone scrollable pour que le contenu
-  // ne finisse pas caché derrière le piano fixé. +30px pour absorber safe-area-inset-bottom.
+  // En paysage, padding-bottom pour ne pas que le contenu finisse caché derrière le piano fixé.
   const piPad=R.piano.h+34;
 
   return(
+    <SlotsCtx.Provider value={slotsValue}>
     <div style={R.landscape?{
       // Paysage : page bloquée à la hauteur d'écran, AUCUN scroll de page possible.
-      // Le scroll, s'il survient, est contenu dans la zone leçon (interne).
       // Safe-area-insets pour respecter notch / dynamic island / indicateur home iPad.
       height:"100dvh",overflow:"hidden",background:"linear-gradient(180deg,#0a0a14,#12121f 40%,#161625)",
       color:"#e2e8f0",fontFamily:"'JetBrains Mono','SF Mono','Fira Code',monospace",
       display:"flex",flexDirection:"column",
-      padding:"max(6px,env(safe-area-inset-top)) max(24px,env(safe-area-inset-right)) 0 max(24px,env(safe-area-inset-left))",
+      padding:"max(8px,env(safe-area-inset-top)) max(24px,env(safe-area-inset-right)) 0 max(24px,env(safe-area-inset-left))",
       maxWidth:1280,margin:"0 auto"
     }:{
       minHeight:"100vh",background:"linear-gradient(180deg,#0a0a14,#12121f 40%,#161625)",color:"#e2e8f0",
@@ -712,68 +901,76 @@ export default function PianoTutor(){
     }}>
       <style>{`
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-        /* Feedback tactile iPadOS : légère réduction au tap (active state) */
         button:active,[role="button"]:active{transform:scale(.97);transition:transform .08s ease-out}
         button{transition:transform .15s ease-out,background .15s,border-color .15s,color .15s,opacity .15s}
-        /* Focus ring visible pour navigation clavier physique iPad */
         button:focus-visible{outline:2px solid #818cf8;outline-offset:2px}
-        /* Améliore le rendu des cercles de doigté en haute densité */
         @media (prefers-reduced-motion:reduce){button:active{transform:none}}
       `}</style>
 
       {R.landscape ? (
-        // En paysage : titre + artiste + Timer compact sur une seule ligne
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:R.pad,flexShrink:0,marginBottom:R.gap}}>
-          <div style={{display:"flex",alignItems:"baseline",gap:R.pad,minWidth:0,flex:1}}>
-            <h1 style={{fontSize:R.font.md+1,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:"#94a3b8",margin:0,whiteSpace:"nowrap"}}>{song.title} - Piano</h1>
-            <p style={{fontSize:R.font.xs,color:"#475569",margin:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{song.artist} | 4 semaines pour gagner ton pari</p>
+        // En paysage : header sur 1 ligne, titre à gauche, Timer + topJsx (Micro/MIDI) à droite
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:R.pad,flexShrink:0,marginBottom:R.gap+2}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:R.pad,minWidth:0,flex:"0 1 auto"}}>
+            <h1 style={{fontSize:R.font.md+1,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:"#cbd5e1",margin:0,whiteSpace:"nowrap"}}>{song.title}</h1>
+            <p style={{fontSize:R.font.xs+1,color:"#64748b",margin:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{song.artist}</p>
           </div>
-          {songKeys.length>1&&<div style={{display:"flex",gap:R.gap}}>
-            {songKeys.map(k=><button key={k} onClick={()=>{setSongId(k);setLes(0)}} style={{
-              padding:"5px 10px",borderRadius:R.rad-2,fontSize:R.font.xs,fontFamily:"inherit",fontWeight:600,cursor:"pointer",minHeight:28,
-              border:k===songId?`1px solid ${SONGS[k].color}`:"1px solid #334155",background:k===songId?`${SONGS[k].color}22`:"transparent",
-              color:k===songId?SONGS[k].color:"#64748b"}}>{SONGS[k].title}</button>)}</div>}
-          <Timer R={R} compact={true}/>
+          <div style={{display:"flex",alignItems:"center",gap:R.gap+2,flexShrink:0}}>
+            {songKeys.length>1&&<div style={{display:"flex",gap:R.gap}}>
+              {songKeys.map(k=><button key={k} onClick={()=>{setSongId(k);setLes(0)}} style={{
+                padding:"6px 12px",borderRadius:R.rad-2,fontSize:R.font.xs,fontFamily:"inherit",fontWeight:600,cursor:"pointer",minHeight:32,
+                border:k===songId?`1px solid ${SONGS[k].color}`:"1px solid #334155",background:k===songId?`${SONGS[k].color}22`:"transparent",
+                color:k===songId?SONGS[k].color:"#94a3b8"}}>{SONGS[k].title}</button>)}</div>}
+            <Timer R={R} compact={true}/>
+            <div style={{minWidth:0,maxWidth:340}}>{topJsx}</div>
+          </div>
         </div>
       ) : (
-        // En portrait, layout classique
+        // En portrait, layout classique mais sans "4 semaines pour gagner ton pari"
         <>
           <div style={{textAlign:"center",marginBottom:R.pad}}>
-            <h1 style={{fontSize:R.font.lg+2,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:"#94a3b8",margin:0}}>{song.title} - Piano</h1>
-            <p style={{fontSize:R.font.xs+1,color:"#475569",margin:"3px 0 0"}}>{song.artist} | 4 semaines pour gagner ton pari</p>
+            <h1 style={{fontSize:R.font.lg+2,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:"#cbd5e1",margin:0}}>{song.title}</h1>
+            <p style={{fontSize:R.font.xs+1,color:"#64748b",margin:"3px 0 0"}}>{song.artist}</p>
           </div>
           {songKeys.length>1&&<div style={{display:"flex",gap:R.gap,justifyContent:"center",marginBottom:R.pad}}>
             {songKeys.map(k=><button key={k} onClick={()=>{setSongId(k);setLes(0)}} style={{
               padding:`${R.ipad?10:7}px ${R.ipad?20:14}px`,borderRadius:R.rad,fontSize:R.font.sm,fontFamily:"inherit",fontWeight:600,cursor:"pointer",minHeight:R.btn.min,
               border:k===songId?`2px solid ${SONGS[k].color}`:"1px solid #334155",background:k===songId?`${SONGS[k].color}22`:"transparent",
-              color:k===songId?SONGS[k].color:"#64748b"}}>{SONGS[k].title}</button>)}</div>}
+              color:k===songId?SONGS[k].color:"#94a3b8"}}>{SONGS[k].title}</button>)}</div>}
           <Timer R={R}/>
+          {/* En portrait : topJsx (InputWidget) rendu directement sous le Timer */}
+          {topJsx&&<div style={{marginBottom:R.pad}}>{topJsx}</div>}
         </>
       )}
 
-      {/* Lesson tabs — plus compactes en paysage */}
-      <div style={{display:"flex",gap:R.ipad?5:3,marginBottom:R.landscape?R.gap:R.pad,overflowX:"auto",paddingBottom:2,flexShrink:0}}>
-        {song.lessons.map((l,i)=>{const dn=l.goals.every((_,gi)=>done.has(`${songId}-${i}-${gi}`));const ac=i===les;
+      {/* Onglets de leçon — meilleur contraste (background plus marqué, couleur d'accent par leçon) */}
+      <div style={{display:"flex",gap:R.ipad?5:3,marginBottom:R.landscape?R.gap+2:R.pad,overflowX:"auto",paddingBottom:2,flexShrink:0}}>
+        {song.lessons.map((l,i)=>{const dn=l.goals.every((_,gi)=>done.has(`${songId}-${i}-${gi}`));const ac=i===les;const c=lessonColors[i]||"#6366f1";
           return(<button key={i} onClick={()=>setLes(i)} style={{
-            flex:"1 0 0",minWidth:0,padding:R.landscape?"4px 4px":R.tab.p,borderRadius:R.rad-2,cursor:"pointer",fontFamily:"inherit",textAlign:"center",
-            border:ac?"1px solid #6366f1":"1px solid rgba(255,255,255,.05)",background:ac?"rgba(99,102,241,.1)":"rgba(255,255,255,.02)",
-            opacity:ac?1:.5,transition:"all .2s",minHeight:R.landscape?32:R.btn.min}}>
-            <div style={{fontSize:R.landscape?12:R.tab.icon,marginBottom:0,lineHeight:1}}>{dn?<span style={{color:"#10b981"}}>✓</span>:l.icon}</div>
-            <div style={{fontSize:R.landscape?10:R.tab.f,fontWeight:600,color:ac?"#818cf8":"#64748b",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",lineHeight:1.2}}>{l.t}</div>
+            flex:"1 0 0",minWidth:0,padding:R.landscape?"6px 4px":R.tab.p,borderRadius:R.rad-2,cursor:"pointer",fontFamily:"inherit",textAlign:"center",
+            border:ac?`1.5px solid ${c}`:"1px solid #334155",
+            background:ac?`${c}22`:"rgba(255,255,255,.04)",
+            transition:"all .2s",minHeight:R.landscape?38:R.btn.min}}>
+            <div style={{fontSize:R.landscape?14:R.tab.icon,marginBottom:1,lineHeight:1,color:ac?c:dn?"#10b981":"#cbd5e1"}}>{dn?"✓":l.icon}</div>
+            <div style={{fontSize:R.landscape?10:R.tab.f,fontWeight:700,color:ac?c:"#cbd5e1",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",lineHeight:1.2,letterSpacing:.3}}>{l.t}</div>
           </button>)})}
       </div>
 
       {/* Zone leçon */}
       {R.landscape ? (
-        // Grille avec scroll interne uniquement dans la colonne contenu si nécessaire
-        <div style={{flex:1,minHeight:0,display:"grid",gridTemplateColumns:"1fr 280px",gap:R.pad,alignItems:"stretch",overflow:"hidden"}}>
+        // Grille : contenu à gauche, objectifs+tip+sideJsx à droite
+        <div style={{flex:1,minHeight:0,display:"grid",gridTemplateColumns:"1fr 290px",gap:R.pad,alignItems:"stretch",overflow:"hidden"}}>
           <div style={{minWidth:0,overflowY:"auto",overflowX:"hidden",paddingRight:6,paddingBottom:piPad}}>{lessonContent}</div>
-          <div style={{overflowY:"auto",paddingBottom:piPad}}>{lessonHeader}</div>
+          <div style={{overflowY:"auto",paddingBottom:piPad,display:"flex",flexDirection:"column",gap:R.gap+2}}>
+            {lessonHeader}
+            {sideJsx}
+          </div>
         </div>
       ) : (
+        // Portrait : tout en flux normal
         <>
           {lessonHeader}
           {lessonContent}
+          {sideJsx&&<div style={{marginTop:R.pad}}>{sideJsx}</div>}
         </>
       )}
 
@@ -786,5 +983,6 @@ export default function PianoTutor(){
           background:les>=song.lessons.length-1?"transparent":"#6366f122",
           color:les>=song.lessons.length-1?"#334155":"#818cf8",opacity:les>=song.lessons.length-1?.4:1}}>Suivante →</Btn>
       </div>}
-    </div>);
+    </div>
+    </SlotsCtx.Provider>);
 }
