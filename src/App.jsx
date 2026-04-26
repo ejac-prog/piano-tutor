@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, createContext, useCo
 /* ═══════════════════════════════════════════════════════════════════
    SLOTS CONTEXT — pousser top (header right) et side (sidebar) JSX
    ═══════════════════════════════════════════════════════════════════ */
-const SlotsCtx = createContext({ setTop:()=>{}, setSide:()=>{}, has:false });
+const SlotsCtx = createContext({ setTop:()=>{}, setSide:()=>{}, setPiano:()=>{}, has:false });
 
 /* ═══════════════════════════════════════════════════════════════════
    SONG DATA — add new songs here
@@ -276,15 +276,8 @@ function Piano({keys,hl,hl2,fm,c1,c2,pressed,onClick,detectedNote,midiNotes,hand
           <div style={{fontSize:R.font.xs-2,fontWeight:600,color:det?"#fff":cl?"#fff":"#64748b"}}>{fr(k.note)}</div>
         </div>);})}
     </div>);
-  // En paysage iPad, le piano est fixé en bas de la fenêtre, par-dessus le contenu.
-  // Le wrapper parent doit prévoir un padding-bottom pour ne pas que le contenu finisse caché.
-  // safe-area-inset-bottom évite que les touches soient masquées par l'indicateur home iPad.
-  if(R.landscape){
-    return(<div style={{position:"fixed",left:0,right:0,bottom:0,
-      padding:"6px max(20px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left))",
-      background:"linear-gradient(180deg,rgba(10,10,20,0) 0%,rgba(10,10,20,.92) 35%,rgba(10,10,20,.98) 100%)",
-      backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",zIndex:50}}>{inner}</div>);
-  }
+  // Le piano retourne juste son inner. Le wrapper (flex-shrink:0 en paysage,
+  // inline en portrait) est géré par le parent PianoTutor.
   return inner;
 }
 
@@ -471,15 +464,17 @@ function InputWidget({pitch,midi,expected,R}){
 }
 
 /* ───────────────────────────────────────────────────────────────────
-   useSlots : helper pour pousser top (header right) et side (sidebar)
-   depuis une leçon. Le cleanup utilise un updater fonctionnel pour ne
-   nettoyer QUE si le slot contient encore notre JSX (sinon une leçon
-   qui se démonte effacerait les slots de la suivante).
+   useSlots : helper pour pousser top (header right), side (sidebar)
+   et piano (bas du layout) depuis une leçon. Le cleanup utilise un
+   updater fonctionnel pour ne nettoyer QUE si le slot contient encore
+   notre JSX (sinon une leçon qui se démonte effacerait les slots de
+   la suivante).
    ─────────────────────────────────────────────────────────────────── */
-function useSlots(top,side){
-  const{setTop,setSide}=useContext(SlotsCtx);
+function useSlots(top,side,piano){
+  const{setTop,setSide,setPiano}=useContext(SlotsCtx);
   useEffect(()=>{setTop(top);return()=>setTop(p=>p===top?null:p)},[top,setTop]);
   useEffect(()=>{setSide(side);return()=>setSide(p=>p===side?null:p)},[side,setSide]);
+  useEffect(()=>{setPiano(piano);return()=>setPiano(p=>p===piano?null:p)},[piano,setPiano]);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -520,10 +515,12 @@ function L1({song,R,...inp}){
   const onListen=()=>{a.unlock();a.chord(ch.keys);setPr(new Set(ch.keys));setTimeout(()=>setPr(new Set()),500)};
   const onPractice=()=>{a.unlock();setLoop(true);setCi(0);ciRef.current=0;setBt(0)};
   const onStop=()=>setLoop(false);
+  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
 
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>,[pitch,midi,ch.keys,R]);
   const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={looping} beat={bt}/>,[R,ch.color,bpm,looping,bt]);
-  useSlots(top,side);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R]);
+  useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     <ChordBtns chords={song.chords} ci={ci} setCi={setCi} unlock={a.unlock} R={R}/>
@@ -532,7 +529,7 @@ function L1({song,R,...inp}){
       <div style={{display:"flex",justifyContent:"center",gap:R.ipad?24:18}}>
         {ch.keys.map(k=><div key={k} style={{textAlign:"center"}}><div style={{fontSize:R.font.xl,fontWeight:700,color:ch.color}}>{fr(k)}</div><div style={{fontSize:R.font.xs,color:"#64748b"}}>doigt {ch.fingers[k]}</div></div>)}</div>
     </div>
-    <Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
+    {!R.landscape&&pianoJsx}
   </div>);
 }
 
@@ -561,10 +558,12 @@ function L2({song,R,...inp}){
   const onListen=()=>{stopArp();playArp()};
   const onPractice=()=>{a.unlock();stopArp();setCi(0);ciRef.current=0;setBt(0);setLoop(true)};
   const onStop=()=>{stopArp();setLoop(false)};
+  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
 
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.arp[idx>=0?idx:0]} R={R}/>,[pitch,midi,ch.arp,idx,R]);
   const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={looping||arpPlaying} beat={looping?bt:undefined}/>,[R,ch.color,bpm,looping,arpPlaying,bt]);
-  useSlots(top,side);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R]);
+  useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     <ChordBtns chords={song.chords} ci={ci} setCi={i=>{setCi(i);ciRef.current=i;stopArp()}} unlock={a.unlock} R={R}/>
@@ -574,7 +573,7 @@ function L2({song,R,...inp}){
         {ch.arp.slice(0,4).map((n,i)=><div key={i} style={{padding:`${R.ipad?6:4}px ${R.ipad?12:8}px`,borderRadius:R.rad-4,background:i===idx%4?`${ch.color}33`:"rgba(255,255,255,.05)",border:i===idx%4?`1px solid ${ch.color}`:"1px solid transparent"}}>
           <div style={{fontSize:R.font.lg,fontWeight:700,color:ch.color}}>{fr(n)}</div></div>)}</div>
     </div>
-    <Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
+    {!R.landscape&&pianoJsx}
   </div>);
 }
 
@@ -596,7 +595,9 @@ function L3({song,R,...inp}){
 
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={cur!=="_"?cur:null} R={R}/>,[pitch,midi,cur,R]);
   const side=useMemo(()=><LessonControls R={R} color="#f87171" onListen={playOnce} onPractice={playLoop} onStop={stop} isPracticing={playing}/>,[R,playing]);
-  useSlots(top,side);
+  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(song.riffNotes)} fm={song.melFingers} hands={handsOf(song.riffNotes,"R")} c1="#f87171" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,song.riffNotes,song.melFingers,pr,detNote,midiNotes,R]);
+  useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     <div style={{padding:R.pad,marginBottom:R.pad,borderRadius:R.rad,background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.2)"}}>
@@ -604,7 +605,7 @@ function L3({song,R,...inp}){
       <div style={{display:"flex",justifyContent:"center",gap:R.ipad?18:14}}>
         {song.riffNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg+2,fontWeight:700,color:"#f87171"}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#fb923c"}}>doigt {song.melFingers[n]}</div></div>)}</div>
     </div>
-    <Piano keys={song.keys} hl={new Set(song.riffNotes)} fm={song.melFingers} hands={handsOf(song.riffNotes,"R")} c1="#f87171" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
+    {!R.landscape&&pianoJsx}
     <SeqVizCompact notes={song.riff} idx={idx} color="#f87171" R={R}/>
   </div>);
 }
@@ -628,7 +629,9 @@ function L4({song,R,...inp}){
 
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={cur!=="_"?cur:null} R={R}/>,[pitch,midi,cur,R]);
   const side=useMemo(()=><LessonControls R={R} color="#e879f9" onListen={playOnce} onPractice={playLoop} onStop={stop} isPracticing={playing}/>,[R,playing]);
-  useSlots(top,side);
+  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(song.melodyNotes)} fm={song.melFingers} hands={handsOf(song.melodyNotes,"R")} c1="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,song.melodyNotes,song.melFingers,pr,detNote,midiNotes,R]);
+  useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     <div style={{display:"flex",gap:R.gap+2,justifyContent:"center",marginBottom:R.pad}}>
@@ -638,7 +641,7 @@ function L4({song,R,...inp}){
       <div style={{display:"flex",justifyContent:"center",gap:R.ipad?18:14}}>
         {song.melodyNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg,fontWeight:700,color:"#e879f9"}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#a78bfa"}}>doigt {song.melFingers[n]}</div></div>)}</div>
     </div>
-    <Piano keys={song.keys} hl={new Set(song.melodyNotes)} fm={song.melFingers} hands={handsOf(song.melodyNotes,"R")} c1="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
+    {!R.landscape&&pianoJsx}
     <SeqVizCompact notes={m.notes} idx={idx} color="#e879f9" R={R}/>
   </div>);
 }
@@ -678,7 +681,9 @@ function L5({song,R,...inp}){
       </div>
     }
   />,[R,handColor,playingAll,ch.color]);
-  useSlots(top,side);
+  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mf} hands={handsCombined} c1={ch.color} c2="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,melN,mf,handsCombined,ch.color,pr,detNote,midiNotes,R]);
+  useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     <ChordBtns chords={song.chords} ci={ci} setCi={i=>{setCi(i);setStep(0);stopAll()}} unlock={a.unlock} R={R}/>
@@ -698,7 +703,7 @@ function L5({song,R,...inp}){
         <Btn onClick={()=>setStep(Math.min(steps.length-1,step+1))} style={{opacity:step>=steps.length-1?.3:1}}>Suivant →</Btn>
       </div>
     </div>
-    <Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mf} hands={handsCombined} c1={ch.color} c2="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
+    {!R.landscape&&pianoJsx}
   </div>);
 }
 
@@ -735,11 +740,13 @@ function L6({song,R,...inp}){
       </div>
     }
   />,[R,ch.color,bpm,run,bt,pct,song.bpm]);
-  useSlots(top,side);
+  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R]);
+  useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
-    <Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
     <ProgBar chords={song.chords} ci={ci} R={R}/>
+    {!R.landscape&&pianoJsx}
   </div>);
 }
 
@@ -787,7 +794,9 @@ function L7({song,R,...inp}){
       </>
     }
   />,[R,ch.color,run,display.bt,display.si,finished,song.title,song.bpm]);
-  useSlots(top,side);
+  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R]);
+  useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     <div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginBottom:R.pad}}>
@@ -801,7 +810,7 @@ function L7({song,R,...inp}){
           color:i===display.si?"#818cf8":i<display.si?"#34d399":"#cbd5e1",
           transition:"all .15s"
         }}>{i<display.si&&"✓ "}{s.label}</button>)}</div></div>
-    <Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)}}/>
+    {!R.landscape&&pianoJsx}
     <ProgBar chords={song.chords} ci={display.ci} R={R}/>
   </div>);
 }
@@ -851,7 +860,8 @@ export default function PianoTutor(){
   // Slots : top (header right) et side (sous le tip dans la colonne droite)
   const[topJsx,setTopJsx]=useState(null);
   const[sideJsx,setSideJsx]=useState(null);
-  const slotsValue=useMemo(()=>({setTop:setTopJsx,setSide:setSideJsx,has:true}),[]);
+  const[pianoJsx,setPianoJsx]=useState(null);
+  const slotsValue=useMemo(()=>({setTop:setTopJsx,setSide:setSideJsx,setPiano:setPianoJsx,has:true}),[]);
 
   useEffect(()=>{pitch.onNote(n=>{setDetNote(n);clearTimeout(dt.current);dt.current=setTimeout(()=>setDetNote(null),400)})},[pitch.onNote]);
   useEffect(()=>{midi.onNote((n,t)=>{if(t==="on"){setDetNote(n);clearTimeout(dt.current);dt.current=setTimeout(()=>setDetNote(null),600)}})},[midi.onNote]);
@@ -880,13 +890,11 @@ export default function PianoTutor(){
   // Bloc de leçon active (key force le remount = nettoie tous les intervals)
   const lessonContent=<LessonComp key={`${songId}-${les}`} song={song} R={R} a={au} pitch={pitch} midi={midi} detNote={detNote} midiNotes={midi.activeNotes}/>;
 
-  // En paysage, padding-bottom pour ne pas que le contenu finisse caché derrière le piano fixé.
-  const piPad=R.piano.h+34;
-
   return(
     <SlotsCtx.Provider value={slotsValue}>
     <div style={R.landscape?{
-      // Paysage : page bloquée à la hauteur d'écran, AUCUN scroll de page possible.
+      // Paysage : page bloquée à 100dvh, AUCUN scroll de page possible.
+      // Layout flex column : header → onglets → grille leçon (flex:1) → piano (flex-shrink:0)
       // Safe-area-insets pour respecter notch / dynamic island / indicateur home iPad.
       height:"100dvh",overflow:"hidden",background:"linear-gradient(180deg,#0a0a14,#12121f 40%,#161625)",
       color:"#e2e8f0",fontFamily:"'JetBrains Mono','SF Mono','Fira Code',monospace",
@@ -925,7 +933,7 @@ export default function PianoTutor(){
           </div>
         </div>
       ) : (
-        // En portrait, layout classique mais sans "4 semaines pour gagner ton pari"
+        // En portrait, layout classique
         <>
           <div style={{textAlign:"center",marginBottom:R.pad}}>
             <h1 style={{fontSize:R.font.lg+2,fontWeight:700,letterSpacing:3,textTransform:"uppercase",color:"#cbd5e1",margin:0}}>{song.title}</h1>
@@ -942,7 +950,7 @@ export default function PianoTutor(){
         </>
       )}
 
-      {/* Onglets de leçon — meilleur contraste (background plus marqué, couleur d'accent par leçon) */}
+      {/* Onglets de leçon — chaque onglet a sa couleur d'accent */}
       <div style={{display:"flex",gap:R.ipad?5:3,marginBottom:R.landscape?R.gap+2:R.pad,overflowX:"auto",paddingBottom:2,flexShrink:0}}>
         {song.lessons.map((l,i)=>{const dn=l.goals.every((_,gi)=>done.has(`${songId}-${i}-${gi}`));const ac=i===les;const c=lessonColors[i]||"#6366f1";
           return(<button key={i} onClick={()=>setLes(i)} style={{
@@ -957,10 +965,11 @@ export default function PianoTutor(){
 
       {/* Zone leçon */}
       {R.landscape ? (
-        // Grille : contenu à gauche, objectifs+tip+sideJsx à droite
-        <div style={{flex:1,minHeight:0,display:"grid",gridTemplateColumns:"1fr 290px",gap:R.pad,alignItems:"stretch",overflow:"hidden"}}>
-          <div style={{minWidth:0,overflowY:"auto",overflowX:"hidden",paddingRight:6,paddingBottom:piPad}}>{lessonContent}</div>
-          <div style={{overflowY:"auto",paddingBottom:piPad,display:"flex",flexDirection:"column",gap:R.gap+2}}>
+        // Grille : contenu à gauche, objectifs+tip+sideJsx à droite. flex:1 et min-height:0 critiques pour
+        // que le scroll interne fonctionne sans pousser le piano hors écran.
+        <div style={{flex:1,minHeight:0,display:"grid",gridTemplateColumns:"1fr 300px",gap:R.pad,alignItems:"stretch",overflow:"hidden",marginBottom:R.gap}}>
+          <div style={{minWidth:0,overflowY:"auto",overflowX:"hidden",paddingRight:6}}>{lessonContent}</div>
+          <div style={{overflowY:"auto",display:"flex",flexDirection:"column",gap:R.gap+2,paddingRight:4}}>
             {lessonHeader}
             {sideJsx}
           </div>
@@ -973,6 +982,10 @@ export default function PianoTutor(){
           {sideJsx&&<div style={{marginTop:R.pad}}>{sideJsx}</div>}
         </>
       )}
+
+      {/* Piano fixé en bas du flex (paysage uniquement). En portrait, le piano est rendu DANS la leçon. */}
+      {R.landscape&&pianoJsx&&<div style={{flexShrink:0,padding:`6px 0 max(8px,env(safe-area-inset-bottom))`,
+        background:"linear-gradient(180deg,rgba(10,10,20,0) 0%,rgba(10,10,20,.6) 100%)"}}>{pianoJsx}</div>}
 
       {/* Nav (cachée en paysage : les onglets servent déjà à naviguer) */}
       {!R.landscape&&<div style={{display:"flex",justifyContent:"space-between",marginTop:R.pad+4,padding:"0 2px"}}>
