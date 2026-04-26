@@ -46,7 +46,7 @@ const SONGS = {
         notes:[{note:"E4",dur:1,ly:"In"},{note:"D4",dur:1,ly:"your"},{note:"B3",dur:2,ly:"head"},{note:"_",dur:1},{note:"E4",dur:1,ly:"in"},{note:"D4",dur:1,ly:"your"},{note:"B3",dur:2,ly:"head"},{note:"_",dur:1},{note:"E4",dur:1,ly:"zom-"},{note:"E4",dur:1,ly:"bie"},{note:"D4",dur:1,ly:"zom-"},{note:"D4",dur:1,ly:"bie"},{note:"C4",dur:1,ly:"zom-"},{note:"B3",dur:2,ly:"bie"}] },
     },
     melodyNotes: ["B3","C4","D4","E4"],
-    melFingers: {E4:"1",D4:"2",C4:"3",B3:"4",A3:"5"},
+    melFingers: {A3:"1",B3:"2",C4:"3",D4:"4",E4:"5"},
     melPerChord: [["E4","E4","D4","D4"],["E4","E4","D4","E4"],["E4","D4","B3","B3"],["E4","D4","D4","C4"]],
     structure: [
       {section:"intro",label:"Intro",reps:1},{section:"verse",label:"Couplet 1",reps:2},
