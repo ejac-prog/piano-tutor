@@ -1,9 +1,31 @@
-import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext, memo } from "react";
 
 /* ═══════════════════════════════════════════════════════════════════
    SLOTS CONTEXT — pousser top (header right) et side (sidebar) JSX
    ═══════════════════════════════════════════════════════════════════ */
 const SlotsCtx = createContext({ setTop:()=>{}, setSide:()=>{}, setPiano:()=>{}, has:false });
+
+/* ═══════════════════════════════════════════════════════════════════
+   RESPONSIVE CONTEXT — un seul listener de resize partagé par toute l'app
+   au lieu d'un par composant qui appelle useResponsive(). Économie : ~10
+   listeners en moins en pratique.
+   ═══════════════════════════════════════════════════════════════════ */
+const ResponsiveCtx = createContext(null);
+
+/* ═══════════════════════════════════════════════════════════════════
+   APP CONSTANTS — magic numbers centralisés
+   ═══════════════════════════════════════════════════════════════════ */
+const BPM_MIN = 40;
+const BPM_MAX = 120;
+const BPM_STEP = 5;
+const BEATS_PER_BAR = 4;
+// Couleur par défaut de la main droite (mélodie)
+const RIGHT_HAND_COLOR = "#e879f9";
+// Délais visuels (ms) pour les surbrillances "pressed" lors de la lecture
+const PRESS_FLASH_MS = 300;
+const PRESS_FLASH_LONG_MS = 500;
+// Convertit BPM en millisecondes par temps (noire)
+const beatMs = bpm => 60000 / bpm;
 
 /* ═══════════════════════════════════════════════════════════════════
    SONG DATA — add new songs here
@@ -47,7 +69,7 @@ const SONGS = {
     },
     melodyNotes: ["B3","C4","D4","E4"],
     melFingers: {A3:"1",B3:"2",C4:"3",D4:"4",E4:"5"},
-    melPerChord: [["E4","E4","D4","D4"],["E4","E4","D4","E4"],["E4","D4","B3","B3"],["E4","D4","D4","C4"]],
+    melPerChord: [["E4","D4","B3","B3"],["E4","D4","B3","B3"],["E4","E4","D4","D4"],["E4","E4","D4","C4"]],
     structure: [
       {section:"intro",label:"Intro",reps:1},{section:"verse",label:"Couplet 1",reps:2},
       {section:"chorus",label:"Refrain",reps:2},{section:"verse",label:"Couplet 2",reps:2},
@@ -65,7 +87,7 @@ const SONGS = {
        tip:"C'est ce riff qui fait reconnaître la chanson dès les premières secondes."},
       {t:"La mélodie",s:"Main droite, couplet + refrain",icon:"④",wk:"Sem. 2",
        goals:["Jouer le couplet","Jouer le refrain","Enchaîner les deux sans pause"],
-       tip:"Pouce sur mi, index sur ré, majeur sur do, annulaire sur si."},
+       tip:"Pouce sur la, index sur si, majeur sur do, annulaire sur ré, auriculaire sur mi."},
       {t:"Les deux mains",s:"Coordination lente",icon:"⑤",wk:"Sem. 3",
        goals:["Accord + 2 notes de mélodie","2 accords avec mélodie à 40 bpm","Boucle complète à 50 bpm"],
        tip:"Plaque l'accord, garde-le enfoncé, puis ajoute UNE note de mélodie."},
@@ -97,16 +119,10 @@ for(let o=2;o<=6;o++) MIDI_NAMES.forEach((n,i)=>{const midi=(o+1)*12+i;ALL_NOTES
 /* ═══════════════════════════════════════════════════════════════════
    RESPONSIVE HOOK — iPad vs phone
    ═══════════════════════════════════════════════════════════════════ */
-function useResponsive(){
-  const[s,setS]=useState(()=>typeof window!=="undefined"?{w:window.innerWidth,h:window.innerHeight}:{w:400,h:800});
-  useEffect(()=>{const h=()=>setS({w:window.innerWidth,h:window.innerHeight});
-    window.addEventListener("resize",h);window.addEventListener("orientationchange",h);
-    return()=>{window.removeEventListener("resize",h);window.removeEventListener("orientationchange",h)}},[]);
-  const{w,h}=s;
+// Calcule l'objet responsive à partir de width/height. Pure, sans state.
+function computeResponsive(w,h){
   const ipad=w>=700;
-  // Paysage actif seulement quand on est sur un grand écran ET en orientation paysage
   const landscape=ipad && w>h;
-  // En paysage, piano plus haut pour des touches plus longues (proche de la réalité)
   const pianoH=landscape?Math.min(240,Math.floor(h*0.34)):(ipad?240:170);
   const pianoMaxW=landscape?Math.min(w-48,1200):(ipad?680:540);
   return{
@@ -118,6 +134,32 @@ function useResponsive(){
     finger:{w:ipad?28:21,f:ipad?13:10},
     tab:{p:ipad?"10px 8px":"6px 2px",f:ipad?9:6,icon:ipad?16:12},
   };
+}
+
+// Hook SOURCE : à appeler UNE SEULE FOIS au sommet de l'arbre (PianoTutor).
+// Pose les listeners resize/orientation et retourne un objet R stable.
+function useResponsiveSource(){
+  const[s,setS]=useState(()=>typeof window!=="undefined"?{w:window.innerWidth,h:window.innerHeight}:{w:400,h:800});
+  useEffect(()=>{
+    const h=()=>setS({w:window.innerWidth,h:window.innerHeight});
+    window.addEventListener("resize",h);
+    window.addEventListener("orientationchange",h);
+    return()=>{
+      window.removeEventListener("resize",h);
+      window.removeEventListener("orientationchange",h);
+    };
+  },[]);
+  return useMemo(()=>computeResponsive(s.w,s.h),[s.w,s.h]);
+}
+
+// Hook CONSOMMATEUR : lit le ResponsiveCtx. Si pas de provider (test, ou
+// composant utilisé hors arbre), fallback sur les dimensions courantes.
+function useResponsive(){
+  const ctx=useContext(ResponsiveCtx);
+  if(ctx) return ctx;
+  // Fallback : calcul one-shot sans listener (pour cas exceptionnels)
+  if(typeof window==="undefined") return computeResponsive(400,800);
+  return computeResponsive(window.innerWidth,window.innerHeight);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -283,12 +325,18 @@ function useInterval(cb,ms,active){
 /* ═══════════════════════════════════════════════════════════════════
    PIANO
    ═══════════════════════════════════════════════════════════════════ */
-function Piano({keys,hl,hl2,fm,c1,c2,pressed,onClick,detectedNote,midiNotes,hands,R}){
+// Piano memoïsé : ne rerender que quand ses props changent réellement.
+// C'est le composant le plus lourd (50+ touches avec gradients, doigtés).
+const Piano = memo(function Piano({keys,hl,hl2,fm,c1,c2,pressed,onClick,detectedNote,midiNotes,hands,R}){
   const ws=keys.filter(k=>k.type==="w"),bs=keys.filter(k=>k.type==="b");
   const bPos={};let wi=0;
   keys.forEach(k=>{if(k.type==="b")bPos[k.note]=wi-1;else wi++});
   const ww=100/ws.length;
-  const clr=n=>{if(hl&&hl.has(n))return c1;if(hl2&&hl2.has(n))return c2||"#e879f9";return null};
+  // Coloration : priorité à hl2 (main droite) sur hl (main gauche). Cohérent avec
+  // mergeHands qui priorise R quand une note appartient aux deux mains. Sur G par
+  // exemple, B3 est plaqué main G mais aussi joué main D dans la mélodie : on
+  // l'affiche en couleur main D pour que le label "D2" s'aligne avec la couleur.
+  const clr=n=>{if(hl2&&hl2.has(n))return c2||"#e879f9";if(hl&&hl.has(n))return c1;return null};
   const isDet=n=>(detectedNote&&detectedNote===n)||(midiNotes&&midiNotes.has(n));
   // Construit le label de doigté : G3 / D2 si la main est connue, sinon juste le numéro
   const fingerLabel=n=>{const f=fm[n];if(!f)return null;
@@ -324,29 +372,13 @@ function Piano({keys,hl,hl2,fm,c1,c2,pressed,onClick,detectedNote,midiNotes,hand
   // Le piano retourne juste son inner. Le wrapper (flex-shrink:0 en paysage,
   // inline en portrait) est géré par le parent PianoTutor.
   return inner;
-}
+});
 
 /* ═══════════════════════════════════════════════════════════════════
    SHARED COMPONENTS
    ═══════════════════════════════════════════════════════════════════ */
 function Btn({children,onClick,disabled,style:s={}}){const R=useResponsive();
   return <button onClick={onClick} disabled={disabled} style={{minWidth:R.btn.min,minHeight:R.btn.min,borderRadius:R.rad-2,border:"1px solid #334155",background:"transparent",color:"#94a3b8",cursor:disabled?"default":"pointer",fontSize:R.font.sm,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"inherit",fontWeight:600,padding:"4px 8px",...s}}>{children}</button>}
-
-function BpmCtrl({bpm,setBpm,running,toggle,beat,color,R}){
-  const compact=R.landscape;
-  return(<div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:compact?R.gap+4:R.gap*2,padding:compact?`${R.gap}px ${R.pad}px`:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)"}}>
-    <div style={{display:"flex",alignItems:"center",gap:R.gap}}>
-      {!compact&&<div style={{fontSize:R.font.xs,color:"#64748b"}}>BPM</div>}
-      <Btn onClick={()=>setBpm(Math.max(40,bpm-5))} style={{minHeight:compact?34:R.btn.min,minWidth:compact?34:R.btn.min,padding:"2px 8px"}}>-</Btn>
-      <span style={{fontSize:compact?R.font.md+2:R.font.lg,fontWeight:700,color:"#e2e8f0",minWidth:32,textAlign:"center"}}>{bpm}</span>
-      <Btn onClick={()=>setBpm(Math.min(120,bpm+5))} style={{minHeight:compact?34:R.btn.min,minWidth:compact?34:R.btn.min,padding:"2px 8px"}}>+</Btn>
-      {compact&&<div style={{fontSize:R.font.xs,color:"#64748b",marginLeft:2}}>bpm</div>}
-    </div>
-    <button onClick={toggle} style={{width:compact?40:R.btn.play,height:compact?40:R.btn.play,borderRadius:"50%",cursor:"pointer",fontSize:compact?R.font.md:R.font.lg,border:`2px solid ${running?"#ef4444":"#10b981"}`,background:running?"#ef444422":"#10b98122",color:running?"#ef4444":"#10b981",display:"flex",alignItems:"center",justifyContent:"center"}}>{running?"■":"▶"}</button>
-    {running&&beat!==undefined&&<div style={{display:"flex",gap:R.gap}}>
-      {[0,1,2,3].map(b=><div key={b} style={{width:compact?10:(R.ipad?14:10),height:compact?10:(R.ipad?14:10),borderRadius:"50%",background:b===beat?color:"rgba(255,255,255,.1)",boxShadow:b===beat?`0 0 8px ${color}66`:"none",transition:"all .1s"}}/>)}</div>}
-  </div>);
-}
 
 /* ───────────────────────────────────────────────────────────────────
    LessonControls : panneau unifié de contrôles (tempo + écouter/pratiquer)
@@ -389,22 +421,6 @@ function LessonControls({R,color,bpm,setBpm,minBpm=40,maxBpm=120,onListen,onPrac
       {extra}
     </div>
   );
-}
-
-function SeqViz({notes,idx,color,onPlay,onStop,playing,R}){
-  return(<div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginTop:R.pad}}>
-    <div style={{display:"flex",gap:3,flexWrap:"wrap",marginBottom:R.gap+2}}>
-      {notes.map((n,i)=>(<div key={i} style={{padding:`${R.ipad?5:3}px ${R.ipad?8:5}px`,borderRadius:R.rad-4,minWidth:R.ipad?36:24,textAlign:"center",
-        background:i===idx?`${color}33`:n.note==="_"?"transparent":"rgba(255,255,255,.04)",
-        border:i===idx?`1px solid ${color}`:"1px solid transparent",transition:"all .1s"}}>
-        <div style={{fontSize:R.font.sm,fontWeight:700,color:n.note==="_"?"#334155":color}}>{n.note==="_"?"·":fr(n.note)}</div>
-        {n.ly&&<div style={{fontSize:R.font.xs,color:"#94a3b8"}}>{n.ly}</div>}</div>))}
-    </div>
-    <div style={{display:"flex",gap:R.gap}}>
-      <Btn onClick={onPlay} style={{border:`1px solid ${color}55`,background:`${color}22`,color,padding:"6px 18px"}}>▶ Jouer</Btn>
-      {playing&&<Btn onClick={onStop} style={{color:"#94a3b8",padding:"6px 14px"}}>■ Stop</Btn>}
-    </div>
-  </div>);
 }
 
 // SeqVizCompact : juste l'affichage de la séquence, sans boutons (utilisé quand
@@ -587,22 +603,45 @@ function ProgBar({chords,ci,R}){
 // L1 — Block chords
 function L1({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
-  const[ci,setCi]=useState(0);const[pr,setPr]=useState(new Set());
-  const[looping,setLoop]=useState(false);const[bpm,setBpm]=useState(60);const[bt,setBt]=useState(0);
-  const ciRef=useRef(ci);useEffect(()=>{ciRef.current=ci},[ci]);
+  const[ci,setCi]=useState(0);
+  const[pr,setPr]=useState(new Set());
+  const[looping,setLoop]=useState(false);
+  const[bpm,setBpm]=useState(60);
+  const[bt,setBt]=useState(0);
+  const ciRef=useRef(ci);
+  useEffect(()=>{ciRef.current=ci},[ci]);
   const ch=song.chords[ci];
 
-  useInterval(()=>{setBt(b=>{if(b+1>=4){setCi(c=>{const n=(c+1)%song.chords.length;ciRef.current=n;return n});return 0}return b+1})},60/bpm*1000,looping);
-  useEffect(()=>{if(looping&&bt===0)a.chord(song.chords[ciRef.current].keys)},[bt,looping]);
+  // Avancement automatique pendant le mode "Pratiquer" (boucle infinie)
+  useInterval(()=>setBt(b=>{
+    if(b+1>=BEATS_PER_BAR){
+      setCi(c=>{const n=(c+1)%song.chords.length;ciRef.current=n;return n});
+      return 0;
+    }
+    return b+1;
+  }),beatMs(bpm),looping);
+  useEffect(()=>{if(looping&&bt===0)a.chord(song.chords[ciRef.current].keys)},[bt,looping,a,song.chords]);
 
-  const onListen=()=>{a.unlock();a.chord(ch.keys);setPr(new Set(ch.keys));setTimeout(()=>setPr(new Set()),500)};
-  const onPractice=()=>{a.unlock();setLoop(true);setCi(0);ciRef.current=0;setBt(0)};
-  const onStop=()=>setLoop(false);
-  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
+  // Handlers stables : useCallback évite la recréation à chaque render et
+  // permet aux useMemo en aval d'avoir des deps fiables.
+  const onListen=useCallback(()=>{
+    a.unlock();a.chord(ch.keys);
+    setPr(new Set(ch.keys));
+    setTimeout(()=>setPr(new Set()),PRESS_FLASH_LONG_MS);
+  },[a,ch.keys]);
+  const onPractice=useCallback(()=>{
+    a.unlock();setLoop(true);setCi(0);ciRef.current=0;setBt(0);
+  },[a]);
+  const onStop=useCallback(()=>setLoop(false),[]);
+  const onPianoClick=useCallback(n=>{
+    a.unlock();a.note(n);
+    setPr(new Set([n]));
+    setTimeout(()=>setPr(new Set()),PRESS_FLASH_MS);
+  },[a]);
 
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>,[pitch,midi,ch.keys,R]);
-  const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={looping} beat={bt}/>,[R,ch.color,bpm,looping,bt]);
-  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R]);
+  const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={looping} beat={bt}/>,[R,ch.color,bpm,looping,bt,onListen,onPractice,onStop]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R,onPianoClick]);
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
@@ -621,39 +660,82 @@ function L1({song,R,...inp}){
 // L2 — Arpeggios
 function L2({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
-  const[ci,setCi]=useState(0);const[pr,setPr]=useState(new Set());const[idx,setIdx]=useState(-1);
-  const[looping,setLoop]=useState(false);const[bpm,setBpm]=useState(60);const[bt,setBt]=useState(0);
+  const[ci,setCi]=useState(0);
+  const[pr,setPr]=useState(new Set());
+  const[idx,setIdx]=useState(-1);
+  const[looping,setLoop]=useState(false);
+  const[bpm,setBpm]=useState(60);
+  const[bt,setBt]=useState(0);
   const[arpPlaying,setArpP]=useState(false);
-  const arRef=useRef(null);const ciRef=useRef(ci);useEffect(()=>{ciRef.current=ci},[ci]);
+  const arRef=useRef(null);
+  const ciRef=useRef(ci);
+  useEffect(()=>{ciRef.current=ci},[ci]);
   const ch=song.chords[ci];
 
-  const playArp=()=>{a.unlock();let i=0;const notes=song.chords[ciRef.current].arp;const step=60/bpm*1000/2;
-    clearInterval(arRef.current);setArpP(true);
-    arRef.current=setInterval(()=>{const nn=song.chords[ciRef.current].arp;if(i>=nn.length)i=0;
-      a.note(nn[i],.28);setIdx(i);setPr(new Set([nn[i]]));i++},step)};
-  const stopArp=()=>{clearInterval(arRef.current);setIdx(-1);setPr(new Set());setArpP(false)};
+  // Lecture en boucle de l'arpège de l'accord courant ("Écouter")
+  const playArp=useCallback(()=>{
+    a.unlock();
+    let i=0;
+    const stepMs=beatMs(bpm)/2; // double-croches : 8 notes = 1 mesure 4/4
+    clearInterval(arRef.current);
+    setArpP(true);
+    arRef.current=setInterval(()=>{
+      const nn=song.chords[ciRef.current].arp;
+      if(i>=nn.length) i=0;
+      a.note(nn[i],.28);
+      setIdx(i);
+      setPr(new Set([nn[i]]));
+      i++;
+    },stepMs);
+  },[a,bpm,song.chords]);
+  const stopArp=useCallback(()=>{
+    clearInterval(arRef.current);
+    setIdx(-1);setPr(new Set());setArpP(false);
+  },[]);
 
-  // Loop mode
-  useEffect(()=>{if(looping){let ni=0,chi=0;const step=60/bpm*1000/2;
-    const id=setInterval(()=>{const c=song.chords[chi];if(ni>=c.arp.length){ni=0;chi=(chi+1)%song.chords.length;setCi(chi);ciRef.current=chi}
-      a.note(song.chords[chi].arp[ni],.25);setPr(new Set([song.chords[chi].arp[ni]]));setIdx(ni);setBt(Math.floor(ni/2));ni++},step);
-    return()=>clearInterval(id)}setBt(0);setIdx(-1);setPr(new Set())},[looping,bpm]);
+  // Mode "Pratiquer" : enchaîne tous les accords en arpèges (boucle infinie)
+  useEffect(()=>{
+    if(!looping){setBt(0);setIdx(-1);setPr(new Set());return}
+    let ni=0,chi=0;
+    const stepMs=beatMs(bpm)/2;
+    const id=setInterval(()=>{
+      const c=song.chords[chi];
+      if(ni>=c.arp.length){
+        ni=0;
+        chi=(chi+1)%song.chords.length;
+        setCi(chi);ciRef.current=chi;
+      }
+      a.note(song.chords[chi].arp[ni],.25);
+      setPr(new Set([song.chords[chi].arp[ni]]));
+      setIdx(ni);
+      setBt(Math.floor(ni/2));
+      ni++;
+    },stepMs);
+    return()=>clearInterval(id);
+  },[looping,bpm,a,song.chords]);
   useEffect(()=>()=>clearInterval(arRef.current),[]);
 
-  const onListen=()=>{stopArp();playArp()};
-  const onPractice=()=>{a.unlock();stopArp();setCi(0);ciRef.current=0;setBt(0);setLoop(true)};
-  const onStop=()=>{stopArp();setLoop(false)};
-  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
+  const onListen=useCallback(()=>{stopArp();playArp()},[stopArp,playArp]);
+  const onPractice=useCallback(()=>{
+    a.unlock();stopArp();setCi(0);ciRef.current=0;setBt(0);setLoop(true);
+  },[a,stopArp]);
+  const onStop=useCallback(()=>{stopArp();setLoop(false)},[stopArp]);
+  const onPianoClick=useCallback(n=>{
+    a.unlock();a.note(n);
+    setPr(new Set([n]));
+    setTimeout(()=>setPr(new Set()),PRESS_FLASH_MS);
+  },[a]);
+  const onChordChange=useCallback(i=>{setCi(i);ciRef.current=i;stopArp()},[stopArp]);
 
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.arp[idx>=0?idx:0]} R={R}/>,[pitch,midi,ch.arp,idx,R]);
-  const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={looping||arpPlaying} beat={looping?bt:undefined}/>,[R,ch.color,bpm,looping,arpPlaying,bt]);
-  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R]);
+  const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={looping||arpPlaying} beat={looping?bt:undefined}/>,[R,ch.color,bpm,looping,arpPlaying,bt,onListen,onPractice,onStop]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R,onPianoClick]);
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     {/* Partition : 4 accords avec arpège courant surligné */}
     <SeqStrip R={R} activeIdx={ci} items={song.chords.map(c=>({label:c.name,sub:c.full,color:c.color}))}/>
-    <ChordBtns chords={song.chords} ci={ci} setCi={i=>{setCi(i);ciRef.current=i;stopArp()}} unlock={a.unlock} R={R}/>
+    <ChordBtns chords={song.chords} ci={ci} setCi={onChordChange} unlock={a.unlock} R={R}/>
     <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,background:`${ch.color}11`,borderRadius:R.rad,border:`1px solid ${ch.color}33`}}>
       <div style={{fontSize:R.font.sm,color:"#94a3b8",marginBottom:R.gap}}>Pattern : bas → milieu → haut → milieu</div>
       <div style={{display:"flex",justifyContent:"center",gap:R.gap}}>
@@ -665,98 +747,217 @@ function L2({song,R,...inp}){
 }
 
 // L3 — Intro riff
+const L3_DEFAULT_BPM = 65;
+const L3_COLOR = "#f87171";
 function L3({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
-  const[idx,setIdx]=useState(-1);const[pr,setPr]=useState(new Set());const[playing,setP]=useState(false);const[loopMode,setLoopMode]=useState(false);
-  const r=useRef(null);const loopRef=useRef(false);
+  const[idx,setIdx]=useState(-1);
+  const[pr,setPr]=useState(new Set());
+  const[playing,setP]=useState(false);
+  const[,setLoopMode]=useState(false);
+  const r=useRef(null);
+  const loopRef=useRef(false);
   const cur=song.riff[idx>=0?idx:0]?.note;
 
-  const playOnce=()=>{a.unlock();loopRef.current=false;setLoopMode(false);let i=0;const step=60/65*1000*.5;clearInterval(r.current);setP(true);
-    r.current=setInterval(()=>{if(i>=song.riff.length){
-        if(loopRef.current){i=0}else{clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false);return}
+  const playOnce=useCallback(()=>{
+    a.unlock();
+    loopRef.current=false;setLoopMode(false);
+    let i=0;
+    const stepMs=beatMs(L3_DEFAULT_BPM)*0.5; // double-croches
+    clearInterval(r.current);
+    setP(true);
+    r.current=setInterval(()=>{
+      if(i>=song.riff.length){
+        if(loopRef.current) i=0;
+        else{
+          clearInterval(r.current);
+          setIdx(-1);setPr(new Set());setP(false);
+          return;
+        }
       }
-      const n=song.riff[i];setIdx(i);if(n.note!=="_"){a.note(n.note,.35);setPr(new Set([n.note]))}else setPr(new Set());i++},step)};
-  const playLoop=()=>{a.unlock();loopRef.current=true;setLoopMode(true);playOnce();loopRef.current=true};
-  const stop=()=>{loopRef.current=false;clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false);setLoopMode(false)};
+      const n=song.riff[i];
+      setIdx(i);
+      if(n.note!=="_"){a.note(n.note,.35);setPr(new Set([n.note]))}
+      else setPr(new Set());
+      i++;
+    },stepMs);
+  },[a,song.riff]);
+  const playLoop=useCallback(()=>{
+    a.unlock();
+    loopRef.current=true;setLoopMode(true);
+    playOnce();
+    loopRef.current=true;
+  },[playOnce]);
+  const stop=useCallback(()=>{
+    loopRef.current=false;
+    clearInterval(r.current);
+    setIdx(-1);setPr(new Set());setP(false);setLoopMode(false);
+  },[]);
   useEffect(()=>()=>clearInterval(r.current),[]);
 
+  const onPianoClick=useCallback(n=>{
+    a.unlock();a.note(n);
+    setPr(new Set([n]));
+    setTimeout(()=>setPr(new Set()),PRESS_FLASH_MS);
+  },[a]);
+
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={cur!=="_"?cur:null} R={R}/>,[pitch,midi,cur,R]);
-  const side=useMemo(()=><LessonControls R={R} color="#f87171" onListen={playOnce} onPractice={playLoop} onStop={stop} isPracticing={playing}/>,[R,playing]);
-  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
-  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(song.riffNotes)} fm={song.melFingers} hands={handsOf(song.riffNotes,"R")} c1="#f87171" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,song.riffNotes,song.melFingers,pr,detNote,midiNotes,R]);
+  const side=useMemo(()=><LessonControls R={R} color={L3_COLOR} onListen={playOnce} onPractice={playLoop} onStop={stop} isPracticing={playing}/>,[R,playing,playOnce,playLoop,stop]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(song.riffNotes)} fm={song.melFingers} hands={handsOf(song.riffNotes,"R")} c1={L3_COLOR} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,song.riffNotes,song.melFingers,pr,detNote,midiNotes,R,onPianoClick]);
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     <div style={{padding:R.pad,marginBottom:R.pad,borderRadius:R.rad,background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.2)"}}>
-      <div style={{fontSize:R.font.sm+1,color:"#f87171",marginBottom:R.gap,fontWeight:600}}>Main droite : riff signature</div>
+      <div style={{fontSize:R.font.sm+1,color:L3_COLOR,marginBottom:R.gap,fontWeight:600}}>Main droite : riff signature</div>
       <div style={{display:"flex",justifyContent:"center",gap:R.ipad?18:14}}>
-        {song.riffNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg+2,fontWeight:700,color:"#f87171"}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#fb923c"}}>doigt {song.melFingers[n]}</div></div>)}</div>
+        {song.riffNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg+2,fontWeight:700,color:L3_COLOR}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#fb923c"}}>doigt {song.melFingers[n]}</div></div>)}</div>
     </div>
     {!R.landscape&&pianoJsx}
-    <SeqVizCompact notes={song.riff} idx={idx} color="#f87171" R={R}/>
+    <SeqVizCompact notes={song.riff} idx={idx} color={L3_COLOR} R={R}/>
   </div>);
 }
 
 // L4 — Melody
+const L4_DEFAULT_BPM = 70;
 function L4({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
   const secs=Object.keys(song.melody);
-  const[sec,setSec]=useState(secs[0]);const[idx,setIdx]=useState(-1);const[pr,setPr]=useState(new Set());const[playing,setP]=useState(false);
-  const r=useRef(null);const loopRef=useRef(false);
-  const m=song.melody[sec];const cur=m.notes[idx>=0?idx:0]?.note;
+  const[sec,setSec]=useState(secs[0]);
+  const[idx,setIdx]=useState(-1);
+  const[pr,setPr]=useState(new Set());
+  const[playing,setP]=useState(false);
+  const r=useRef(null);
+  const loopRef=useRef(false);
+  const m=song.melody[sec];
+  const cur=m.notes[idx>=0?idx:0]?.note;
 
-  const playOnce=()=>{a.unlock();loopRef.current=false;let i=0;const step=60/70*1000*.5;clearInterval(r.current);setP(true);
-    r.current=setInterval(()=>{if(i>=m.notes.length){
-        if(loopRef.current){i=0}else{clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false);return}
+  const playOnce=useCallback(()=>{
+    a.unlock();
+    loopRef.current=false;
+    let i=0;
+    const stepMs=beatMs(L4_DEFAULT_BPM)*0.5;
+    clearInterval(r.current);
+    setP(true);
+    r.current=setInterval(()=>{
+      if(i>=m.notes.length){
+        if(loopRef.current) i=0;
+        else{
+          clearInterval(r.current);
+          setIdx(-1);setPr(new Set());setP(false);
+          return;
+        }
       }
-      const n=m.notes[i];setIdx(i);if(n.note!=="_"){a.note(n.note,.35);setPr(new Set([n.note]))}else setPr(new Set());i++},step)};
-  const playLoop=()=>{loopRef.current=true;playOnce();loopRef.current=true};
-  const stop=()=>{loopRef.current=false;clearInterval(r.current);setIdx(-1);setPr(new Set());setP(false)};
+      const n=m.notes[i];
+      setIdx(i);
+      if(n.note!=="_"){a.note(n.note,.35);setPr(new Set([n.note]))}
+      else setPr(new Set());
+      i++;
+    },stepMs);
+  },[a,m.notes]);
+  const playLoop=useCallback(()=>{
+    loopRef.current=true;playOnce();loopRef.current=true;
+  },[playOnce]);
+  const stop=useCallback(()=>{
+    loopRef.current=false;
+    clearInterval(r.current);
+    setIdx(-1);setPr(new Set());setP(false);
+  },[]);
   useEffect(()=>()=>clearInterval(r.current),[]);
 
+  const onPianoClick=useCallback(n=>{
+    a.unlock();a.note(n);
+    setPr(new Set([n]));
+    setTimeout(()=>setPr(new Set()),PRESS_FLASH_MS);
+  },[a]);
+  const onSecChange=useCallback(k=>{setSec(k);setIdx(-1);stop()},[stop]);
+
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={cur!=="_"?cur:null} R={R}/>,[pitch,midi,cur,R]);
-  const side=useMemo(()=><LessonControls R={R} color="#e879f9" onListen={playOnce} onPractice={playLoop} onStop={stop} isPracticing={playing}/>,[R,playing]);
-  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
-  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(song.melodyNotes)} fm={song.melFingers} hands={handsOf(song.melodyNotes,"R")} c1="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,song.melodyNotes,song.melFingers,pr,detNote,midiNotes,R]);
+  const side=useMemo(()=><LessonControls R={R} color={RIGHT_HAND_COLOR} onListen={playOnce} onPractice={playLoop} onStop={stop} isPracticing={playing}/>,[R,playing,playOnce,playLoop,stop]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(song.melodyNotes)} fm={song.melFingers} hands={handsOf(song.melodyNotes,"R")} c1={RIGHT_HAND_COLOR} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,song.melodyNotes,song.melFingers,pr,detNote,midiNotes,R,onPianoClick]);
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     <div style={{display:"flex",gap:R.gap+2,justifyContent:"center",marginBottom:R.pad}}>
-      {secs.map(k=><button key={k} onClick={()=>{setSec(k);setIdx(-1);stop()}} style={{padding:`${R.ipad?10:7}px ${R.ipad?20:16}px`,borderRadius:R.rad,fontSize:R.font.sm+1,fontFamily:"inherit",fontWeight:600,minHeight:R.btn.min,border:sec===k?"1px solid #e879f9":"1px solid #334155",background:sec===k?"#e879f922":"transparent",color:sec===k?"#e879f9":"#94a3b8",cursor:"pointer"}}>{song.melody[k].label}</button>)}</div>
+      {secs.map(k=><button key={k} onClick={()=>onSecChange(k)} style={{padding:`${R.ipad?10:7}px ${R.ipad?20:16}px`,borderRadius:R.rad,fontSize:R.font.sm+1,fontFamily:"inherit",fontWeight:600,minHeight:R.btn.min,border:sec===k?`1px solid ${RIGHT_HAND_COLOR}`:"1px solid #334155",background:sec===k?`${RIGHT_HAND_COLOR}22`:"transparent",color:sec===k?RIGHT_HAND_COLOR:"#94a3b8",cursor:"pointer"}}>{song.melody[k].label}</button>)}</div>
     <div style={{padding:R.pad,marginBottom:R.pad,borderRadius:R.rad,background:"rgba(232,121,249,.06)",border:"1px solid rgba(232,121,249,.2)"}}>
       <div style={{fontSize:R.font.sm+1,color:"#c084fc",marginBottom:R.gap,fontWeight:600}}>Main droite</div>
       <div style={{display:"flex",justifyContent:"center",gap:R.ipad?18:14}}>
-        {song.melodyNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg,fontWeight:700,color:"#e879f9"}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#a78bfa"}}>doigt {song.melFingers[n]}</div></div>)}</div>
+        {song.melodyNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg,fontWeight:700,color:RIGHT_HAND_COLOR}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#a78bfa"}}>doigt {song.melFingers[n]}</div></div>)}</div>
     </div>
     {!R.landscape&&pianoJsx}
-    <SeqVizCompact notes={m.notes} idx={idx} color="#e879f9" R={R}/>
+    <SeqVizCompact notes={m.notes} idx={idx} color={RIGHT_HAND_COLOR} R={R}/>
   </div>);
 }
 
 // L5 — Both hands
+const L5_STEP_MS = 600;
 function L5({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
-  const[ci,setCi]=useState(0);const[step,setStep]=useState(0);const[pr,setPr]=useState(new Set());
-  const[playingAll,setPlayingAll]=useState(false);const seqRef=useRef(null);
-  const ch=song.chords[ci];const melN=song.melPerChord[ci];
-  const steps=[{t:"chord",l:`Plaque ${ch.name}`,k:ch.keys,hand:"L"},...melN.map((n,i)=>({t:"note",l:`Note ${i+1} : ${fr(n)}`,k:[n],hand:"R"}))];
-  const cur=steps[Math.min(step,steps.length-1)];const mf={...ch.fingers,...song.melFingers};
-  // Hand map combiné : accord en main gauche, mélodie en main droite
-  const handsCombined=mergeHands(handsOf(ch.keys,"L"),handsOf(melN,"R"));
+  const[ci,setCi]=useState(0);
+  const[step,setStep]=useState(0);
+  const[pr,setPr]=useState(new Set());
+  const[playingAll,setPlayingAll]=useState(false);
+  const seqRef=useRef(null);
+  const ch=song.chords[ci];
+  const melN=song.melPerChord[ci];
+
+  // Étapes : 1 plaqué d'accord (main G) + 4 notes de mélodie (main D)
+  const steps=useMemo(()=>[
+    {t:"chord",l:`Plaque ${ch.name}`,k:ch.keys,hand:"L"},
+    ...melN.map((n,i)=>({t:"note",l:`Note ${i+1} : ${fr(n)}`,k:[n],hand:"R"}))
+  ],[ch.name,ch.keys,melN]);
+  const cur=steps[Math.min(step,steps.length-1)];
+  const mf=useMemo(()=>({...ch.fingers,...song.melFingers}),[ch.fingers,song.melFingers]);
+  const handsCombined=useMemo(()=>mergeHands(handsOf(ch.keys,"L"),handsOf(melN,"R")),[ch.keys,melN]);
   const handLabel=cur.hand==="L"?"Main gauche":"Main droite";
-  const handColor=cur.hand==="L"?ch.color:"#e879f9";
+  const handColor=cur.hand==="L"?ch.color:RIGHT_HAND_COLOR;
 
   // "Écouter cette étape" : joue uniquement l'étape courante
-  const playStep=()=>{a.unlock();if(cur.t==="chord")a.chord(cur.k);else cur.k.forEach(n=>a.note(n));setPr(new Set(cur.k));setTimeout(()=>setPr(new Set()),400)};
+  const playStep=useCallback(()=>{
+    a.unlock();
+    if(cur.t==="chord") a.chord(cur.k);
+    else cur.k.forEach(n=>a.note(n));
+    setPr(new Set(cur.k));
+    setTimeout(()=>setPr(new Set()),400);
+  },[a,cur.t,cur.k]);
   // "Tout écouter" : enchaîne accord + 4 notes mélodie en séquence
-  const playAll=()=>{a.unlock();clearInterval(seqRef.current);setPlayingAll(true);
-    let i=0;const stepMs=600;
-    // Frappe immédiatement le premier
-    setStep(0);a.chord(steps[0].k);setPr(new Set(steps[0].k));
-    seqRef.current=setInterval(()=>{i++;if(i>=steps.length){clearInterval(seqRef.current);setPlayingAll(false);setPr(new Set());return}
-      setStep(i);const s=steps[i];if(s.t==="chord")a.chord(s.k);else s.k.forEach(n=>a.note(n));setPr(new Set(s.k));setTimeout(()=>setPr(new Set()),350)},stepMs)};
-  const stopAll=()=>{clearInterval(seqRef.current);setPlayingAll(false);setPr(new Set())};
+  const playAll=useCallback(()=>{
+    a.unlock();
+    clearInterval(seqRef.current);
+    setPlayingAll(true);
+    let i=0;
+    setStep(0);
+    a.chord(steps[0].k);
+    setPr(new Set(steps[0].k));
+    seqRef.current=setInterval(()=>{
+      i++;
+      if(i>=steps.length){
+        clearInterval(seqRef.current);
+        setPlayingAll(false);
+        setPr(new Set());
+        return;
+      }
+      setStep(i);
+      const s=steps[i];
+      if(s.t==="chord") a.chord(s.k);
+      else s.k.forEach(n=>a.note(n));
+      setPr(new Set(s.k));
+      setTimeout(()=>setPr(new Set()),350);
+    },L5_STEP_MS);
+  },[a,steps]);
+  const stopAll=useCallback(()=>{
+    clearInterval(seqRef.current);
+    setPlayingAll(false);
+    setPr(new Set());
+  },[]);
   useEffect(()=>()=>clearInterval(seqRef.current),[]);
+
+  const onPianoClick=useCallback(n=>{
+    a.unlock();a.note(n);
+    setPr(new Set([n]));
+    setTimeout(()=>setPr(new Set()),PRESS_FLASH_MS);
+  },[a]);
+  const onChordChange=useCallback(i=>{setCi(i);setStep(0);stopAll()},[stopAll]);
 
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={cur.k[0]} R={R}/>,[pitch,midi,cur.k,R]);
   const side=useMemo(()=><LessonControls R={R} color={handColor} onListen={playStep} onPractice={playAll} onStop={stopAll} isPracticing={playingAll}
@@ -764,12 +965,11 @@ function L5({song,R,...inp}){
       <div style={{padding:`${R.gap+2}px ${R.gap+4}px`,borderRadius:R.rad-4,background:"rgba(255,255,255,.03)",fontSize:R.font.xs+1,color:"#94a3b8",lineHeight:1.6,textAlign:"center"}}>
         <span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:ch.color,verticalAlign:"middle",marginRight:5}}/><b style={{color:ch.color}}>G</b> main gauche
         <span style={{margin:"0 10px",color:"#475569"}}>•</span>
-        <span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:"#e879f9",verticalAlign:"middle",marginRight:5}}/><b style={{color:"#e879f9"}}>D</b> main droite
+        <span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:RIGHT_HAND_COLOR,verticalAlign:"middle",marginRight:5}}/><b style={{color:RIGHT_HAND_COLOR}}>D</b> main droite
       </div>
     }
-  />,[R,handColor,playingAll,ch.color]);
-  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
-  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mf} hands={handsCombined} c1={ch.color} c2="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,melN,mf,handsCombined,ch.color,pr,detNote,midiNotes,R]);
+  />,[R,handColor,playingAll,ch.color,playStep,playAll,stopAll]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mf} hands={handsCombined} c1={ch.color} c2={RIGHT_HAND_COLOR} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,melN,mf,handsCombined,ch.color,pr,detNote,midiNotes,R,onPianoClick]);
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
@@ -777,9 +977,9 @@ function L5({song,R,...inp}){
     <SeqStrip R={R} activeIdx={step} items={steps.map(s=>({
       label:s.t==="chord"?ch.name:fr(s.k[0]),
       sub:s.hand==="L"?"main G":"main D",
-      color:s.hand==="L"?ch.color:"#e879f9"
+      color:s.hand==="L"?ch.color:RIGHT_HAND_COLOR
     }))}/>
-    <ChordBtns chords={song.chords} ci={ci} setCi={i=>{setCi(i);setStep(0);stopAll()}} unlock={a.unlock} R={R}/>
+    <ChordBtns chords={song.chords} ci={ci} setCi={onChordChange} unlock={a.unlock} R={R}/>
     <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.08)"}}>
       {/* Indicateur GRAND de la main active à cette étape */}
       <div style={{display:"inline-flex",alignItems:"center",gap:R.gap+2,padding:`${R.ipad?6:4}px ${R.pad}px`,borderRadius:R.rad,
@@ -789,7 +989,7 @@ function L5({song,R,...inp}){
       </div>
       <div style={{display:"flex",justifyContent:"center",gap:4,marginBottom:R.gap}}>
         {steps.map((s,i)=><div key={i} style={{width:R.ipad?12:8,height:R.ipad?12:8,borderRadius:"50%",
-          background:i===step?(s.hand==="L"?ch.color:"#e879f9"):i<step?"#10b981":"rgba(255,255,255,.1)"}}/>)}</div>
+          background:i===step?(s.hand==="L"?ch.color:RIGHT_HAND_COLOR):i<step?"#10b981":"rgba(255,255,255,.1)"}}/>)}</div>
       <div style={{fontSize:R.font.md,fontWeight:700,color:"#e2e8f0"}}>{cur.l}</div>
       <div style={{display:"flex",gap:R.gap,justifyContent:"center",marginTop:R.gap+2}}>
         <Btn onClick={()=>setStep(Math.max(0,step-1))} style={{opacity:step===0?.3:1}}>← Précédent</Btn>
@@ -803,33 +1003,64 @@ function L5({song,R,...inp}){
 // L6 — Tempo
 function L6({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
-  const[bpm,setBpm]=useState(70);const[run,setRun]=useState(false);const[ci,setCi]=useState(0);const[bt,setBt]=useState(0);const[pr,setPr]=useState(new Set());
+  const[bpm,setBpm]=useState(70);
+  const[run,setRun]=useState(false);
+  const[ci,setCi]=useState(0);
+  const[bt,setBt]=useState(0);
+  const[pr,setPr]=useState(new Set());
   const[listenOnce,setListenOnce]=useState(false);
-  const ciRef=useRef(0);useEffect(()=>{ciRef.current=ci},[ci]);const ch=song.chords[ci];
+  const ciRef=useRef(0);
+  useEffect(()=>{ciRef.current=ci},[ci]);
+  const ch=song.chords[ci];
   const melN=song.melPerChord[ci];
-  // Doigtés combinés (main G + main D)
+  // Doigtés et hand-map combinés (main G + main D)
   const mfCombined=useMemo(()=>({...ch.fingers,...song.melFingers}),[ch.fingers,song.melFingers]);
   const handsCombined=useMemo(()=>mergeHands(handsOf(ch.keys,"L"),handsOf(melN,"R")),[ch.keys,melN]);
 
-  // Tic toc des temps : t=0 plaque l'accord (G) + 1re note mélodie (D);
+  // Tic-toc des temps : t=0 plaque l'accord (G) + 1re note de mélodie (D);
   // t=1,2,3 jouent les notes de mélodie restantes.
-  useInterval(()=>{setBt(b=>{if(b+1>=4){
+  useInterval(()=>setBt(b=>{
+    if(b+1>=BEATS_PER_BAR){
       setCi(c=>{
-        const n=(c+1)%song.chords.length;ciRef.current=n;
+        const n=(c+1)%song.chords.length;
+        ciRef.current=n;
         // Si "Écouter" (1 cycle) : on s'arrête en revenant au début
         if(listenOnce&&n===0){setRun(false);setListenOnce(false)}
         return n;
-      });return 0}return b+1})},60/bpm*1000,run);
-  useEffect(()=>{if(!run)return;const cci=ciRef.current;const c=song.chords[cci];const mn=song.melPerChord[cci];
-    if(bt===0){a.chord(c.keys);if(mn[0])a.note(mn[0],.25);setPr(new Set([...c.keys,mn[0]].filter(Boolean)))}
-    else if(mn[bt]){a.note(mn[bt],.25);setPr(new Set([mn[bt]]))}
+      });
+      return 0;
+    }
+    return b+1;
+  }),beatMs(bpm),run);
+  useEffect(()=>{
+    if(!run) return;
+    const cci=ciRef.current;
+    const c=song.chords[cci];
+    const mn=song.melPerChord[cci];
+    if(bt===0){
+      a.chord(c.keys);
+      if(mn[0]) a.note(mn[0],.25);
+      setPr(new Set([...c.keys,mn[0]].filter(Boolean)));
+    } else if(mn[bt]){
+      a.note(mn[bt],.25);
+      setPr(new Set([mn[bt]]));
+    }
     setTimeout(()=>setPr(new Set()),200);
-  },[bt,run]);
-  const pct=bpm>=song.bpm?100:Math.round((bpm-40)/(song.bpm-40)*100);
+  },[bt,run,a,song.chords,song.melPerChord]);
+  const pct=bpm>=song.bpm?100:Math.round((bpm-BPM_MIN)/(song.bpm-BPM_MIN)*100);
 
-  const onListen=()=>{a.unlock();setCi(0);ciRef.current=0;setBt(0);setListenOnce(true);setRun(true)};
-  const onPractice=()=>{a.unlock();setCi(0);ciRef.current=0;setBt(0);setListenOnce(false);setRun(true)};
-  const onStop=()=>{setRun(false);setListenOnce(false)};
+  const onListen=useCallback(()=>{
+    a.unlock();setCi(0);ciRef.current=0;setBt(0);setListenOnce(true);setRun(true);
+  },[a]);
+  const onPractice=useCallback(()=>{
+    a.unlock();setCi(0);ciRef.current=0;setBt(0);setListenOnce(false);setRun(true);
+  },[a]);
+  const onStop=useCallback(()=>{setRun(false);setListenOnce(false)},[]);
+  const onPianoClick=useCallback(n=>{
+    a.unlock();a.note(n);
+    setPr(new Set([n]));
+    setTimeout(()=>setPr(new Set()),PRESS_FLASH_MS);
+  },[a]);
 
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>,[pitch,midi,ch.keys,R]);
   const side=useMemo(()=><LessonControls R={R} color={ch.color} bpm={bpm} setBpm={setBpm} onListen={onListen} onPractice={onPractice} onStop={onStop} isPracticing={run} beat={bt}
@@ -842,9 +1073,8 @@ function L6({song,R,...inp}){
         <div style={{fontSize:R.font.xs,color:pct>=100?"#34d399":"#fbbf24",marginTop:4,textAlign:"right",fontWeight:600}}>{pct}%</div>
       </div>
     }
-  />,[R,ch.color,bpm,run,bt,pct,song.bpm]);
-  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
-  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mfCombined} hands={handsCombined} c1={ch.color} c2="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,melN,mfCombined,handsCombined,ch.color,pr,detNote,midiNotes,R]);
+  />,[R,ch.color,bpm,run,bt,pct,song.bpm,onListen,onPractice,onStop]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mfCombined} hands={handsCombined} c1={ch.color} c2={RIGHT_HAND_COLOR} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,melN,mfCombined,handsCombined,ch.color,pr,detNote,midiNotes,R,onPianoClick]);
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
@@ -855,7 +1085,7 @@ function L6({song,R,...inp}){
       <div style={{fontSize:R.font.xs,color:"#a78bfa",marginBottom:R.gap-1,letterSpacing:1,textTransform:"uppercase",fontWeight:600}}>Main droite (mélodie)</div>
       <div style={{display:"flex",justifyContent:"center",gap:R.ipad?16:10}}>
         {melN.map((n,i)=><div key={i} style={{textAlign:"center",opacity:run&&i===bt?1:.5,transform:run&&i===bt?"scale(1.15)":"none",transition:"all .15s"}}>
-          <div style={{fontSize:R.font.lg,fontWeight:700,color:"#e879f9"}}>{fr(n)}</div>
+          <div style={{fontSize:R.font.lg,fontWeight:700,color:RIGHT_HAND_COLOR}}>{fr(n)}</div>
           <div style={{fontSize:R.font.xs,color:"#64748b"}}>t{i+1}</div>
         </div>)}
       </div>
@@ -865,49 +1095,91 @@ function L6({song,R,...inp}){
 }
 
 // L7 — Full performance (fixed section advancement)
+const L7_SECTION_COLOR = "#a855f7";
 function L7({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
-  const[run,setRun]=useState(false);const[pr,setPr]=useState(new Set());
-  // Use refs for all mutable state in interval to avoid closure bugs
+  const[run,setRun]=useState(false);
+  const[pr,setPr]=useState(new Set());
+  // Refs pour TOUT l'état muté dans l'intervalle (évite les bugs de closure)
   const state=useRef({si:0,ci:0,rep:0,bt:0});
   const[display,setDisplay]=useState({si:0,ci:0,bt:0});
-  // Jump token : incrémenté à chaque saut de section, force le useEffect à recréer l'intervalle (timing propre)
+  // Jump token : incrémenté à chaque saut de section pour forcer la recréation
+  // de l'intervalle (timing propre, pas de phase qui traîne)
   const[jump,setJump]=useState(0);
-  const ch=song.chords[display.ci];const sec=song.structure[display.si];
+  const ch=song.chords[display.ci];
   const melN=song.melPerChord[display.ci];
   const mfCombined=useMemo(()=>({...ch.fingers,...song.melFingers}),[ch.fingers,song.melFingers]);
   const handsCombined=useMemo(()=>mergeHands(handsOf(ch.keys,"L"),handsOf(melN,"R")),[ch.keys,melN]);
 
-  useEffect(()=>{if(!run)return;const ms=60/song.bpm*1000;
-    // 1 beat = 1 noire ; à chaque beat on joue la note de mélodie correspondante (main droite)
-    // et au beat 0 on plaque l'accord (main gauche). Quand le 4e beat se termine, on passe à
-    // l'accord suivant ; quand on a parcouru tous les accords on incrémente la répétition de
-    // la section ; quand on a fait toutes les répétitions on passe à la section suivante.
-    const id=setInterval(()=>{const s=state.current;s.bt++;
-      if(s.bt>=4){s.bt=0;s.ci=(s.ci+1)%song.chords.length;
-        if(s.ci===0){s.rep++;
-          if(s.rep>=song.structure[s.si].reps){s.rep=0;s.si++;
-            if(s.si>=song.structure.length){setRun(false);return}}}}
-      const c=song.chords[s.ci];const mn=song.melPerChord[s.ci];
-      if(s.bt===0){a.chord(c.keys);if(mn[0])a.note(mn[0],.25);setPr(new Set([...c.keys,mn[0]].filter(Boolean)))}
-      else if(mn[s.bt]){a.note(mn[s.bt],.25);setPr(new Set([mn[s.bt]]))}
+  useEffect(()=>{
+    if(!run) return;
+    const ms=beatMs(song.bpm);
+    // 1 beat = 1 noire. À chaque beat on joue la note de mélodie correspondante (main D)
+    // et au beat 0 on plaque l'accord (main G). 4 beats par accord, on cycle ensuite ;
+    // quand tous les accords sont parcourus on incrémente la répétition, et quand
+    // toutes les répétitions de la section sont faites on passe à la section suivante.
+    const id=setInterval(()=>{
+      const s=state.current;
+      s.bt++;
+      if(s.bt>=BEATS_PER_BAR){
+        s.bt=0;
+        s.ci=(s.ci+1)%song.chords.length;
+        if(s.ci===0){
+          s.rep++;
+          if(s.rep>=song.structure[s.si].reps){
+            s.rep=0;s.si++;
+            if(s.si>=song.structure.length){setRun(false);return}
+          }
+        }
+      }
+      const c=song.chords[s.ci];
+      const mn=song.melPerChord[s.ci];
+      if(s.bt===0){
+        a.chord(c.keys);
+        if(mn[0]) a.note(mn[0],.25);
+        setPr(new Set([...c.keys,mn[0]].filter(Boolean)));
+      } else if(mn[s.bt]){
+        a.note(mn[s.bt],.25);
+        setPr(new Set([mn[s.bt]]));
+      }
       setTimeout(()=>setPr(new Set()),180);
-      setDisplay({si:s.si,ci:s.ci,bt:s.bt})},ms);
-    // First beat utilise l'accord + 1re note mélodie courants
-    const s0=state.current;const c0=song.chords[s0.ci];const mn0=song.melPerChord[s0.ci];
-    a.chord(c0.keys);if(mn0[0])a.note(mn0[0],.25);
-    setPr(new Set([...c0.keys,mn0[0]].filter(Boolean)));setTimeout(()=>setPr(new Set()),180);
-    return()=>clearInterval(id)},[run,jump]);
+      setDisplay({si:s.si,ci:s.ci,bt:s.bt});
+    },ms);
+    // Premier beat immédiat avec accord + 1re note de mélodie courants
+    const s0=state.current;
+    const c0=song.chords[s0.ci];
+    const mn0=song.melPerChord[s0.ci];
+    a.chord(c0.keys);
+    if(mn0[0]) a.note(mn0[0],.25);
+    setPr(new Set([...c0.keys,mn0[0]].filter(Boolean)));
+    setTimeout(()=>setPr(new Set()),180);
+    return()=>clearInterval(id);
+  },[run,jump,a,song.bpm,song.chords,song.structure,song.melPerChord]);
 
-  const reset=()=>{setRun(false);state.current={si:0,ci:0,rep:0,bt:0};setDisplay({si:0,ci:0,bt:0})};
-  const jumpTo=i=>{
-    a.unlock();state.current={si:i,ci:0,rep:0,bt:0};setDisplay({si:i,ci:0,bt:0});
-    if(run){setJump(j=>j+1)}else{setRun(true)}
-  };
+  const reset=useCallback(()=>{
+    setRun(false);
+    state.current={si:0,ci:0,rep:0,bt:0};
+    setDisplay({si:0,ci:0,bt:0});
+  },[]);
+  const jumpTo=useCallback(i=>{
+    a.unlock();
+    state.current={si:i,ci:0,rep:0,bt:0};
+    setDisplay({si:i,ci:0,bt:0});
+    if(run) setJump(j=>j+1);
+    else setRun(true);
+  },[a,run]);
   const finished=!run&&state.current.si>=song.structure.length;
 
-  const onPractice=()=>{a.unlock();reset();setTimeout(()=>setRun(true),0)};
-  const onStop=()=>setRun(false);
+  const onPractice=useCallback(()=>{
+    a.unlock();reset();
+    setTimeout(()=>setRun(true),0);
+  },[a,reset]);
+  const onStop=useCallback(()=>setRun(false),[]);
+  const onPianoClick=useCallback(n=>{
+    a.unlock();a.note(n);
+    setPr(new Set([n]));
+    setTimeout(()=>setPr(new Set()),PRESS_FLASH_MS);
+  },[a]);
 
   const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={ch.keys[0]} R={R}/>,[pitch,midi,ch.keys,R]);
   const side=useMemo(()=><LessonControls R={R} color={ch.color} onPractice={onPractice} onStop={onStop} isPracticing={run} beat={display.bt}
@@ -919,15 +1191,14 @@ function L7({song,R,...inp}){
           <div style={{fontSize:R.font.xs+1,color:"#64748b",marginTop:4}}>{song.title} à {song.bpm} bpm.</div></div>}
       </>
     }
-  />,[R,ch.color,run,display.bt,display.si,finished,song.title,song.bpm]);
-  const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
-  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mfCombined} hands={handsCombined} c1={ch.color} c2="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,melN,mfCombined,handsCombined,ch.color,pr,detNote,midiNotes,R]);
+  />,[R,ch.color,run,display.bt,display.si,finished,song.title,song.bpm,onPractice,onStop,reset]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mfCombined} hands={handsCombined} c1={ch.color} c2={RIGHT_HAND_COLOR} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,melN,mfCombined,handsCombined,ch.color,pr,detNote,midiNotes,R,onPianoClick]);
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
     {/* Partition : sections de la chanson, cliquable pour démarrer à n'importe quelle section */}
     <SeqStrip R={R} activeIdx={display.si} onItemClick={jumpTo} items={song.structure.map((s,i)=>({
-      label:s.label,sub:s.reps>1?`x${s.reps}`:null,color:"#a855f7",done:i<display.si
+      label:s.label,sub:s.reps>1?`x${s.reps}`:null,color:L7_SECTION_COLOR,done:i<display.si
     }))}/>
     <div style={{fontSize:R.font.xs,color:"#64748b",marginBottom:R.gap+2,fontStyle:"italic",textAlign:"center"}}>Tape une section pour démarrer ici</div>
     {/* Cycle des 4 accords pour repère pendant la performance */}
@@ -975,7 +1246,7 @@ export default function PianoTutor(){
   const songKeys=Object.keys(SONGS);
   const[songId,setSongId]=useState(songKeys[0]);
   const[les,setLes]=useState(0);const[done,setDone]=useState(new Set());
-  const au=useAudio();const pitch=usePitch();const midi=useMIDI();const R=useResponsive();
+  const au=useAudio();const pitch=usePitch();const midi=useMIDI();const R=useResponsiveSource();
   const song=SONGS[songId];const L=song.lessons[les];
   const[detNote,setDetNote]=useState(null);const dt=useRef();
   // Slots : top (header right) et side (sous le tip dans la colonne droite)
@@ -1015,6 +1286,7 @@ export default function PianoTutor(){
   const lessonContent=<LessonComp key={`${songId}-${les}`} song={song} R={R} a={au} pitch={pitch} midi={midi} detNote={detNote} midiNotes={midi.activeNotes}/>;
 
   return(
+    <ResponsiveCtx.Provider value={R}>
     <SlotsCtx.Provider value={slotsValue}>
     <div style={R.landscape?{
       // Paysage : page bloquée à 100dvh, AUCUN scroll de page possible.
@@ -1121,5 +1393,6 @@ export default function PianoTutor(){
           color:les>=song.lessons.length-1?"#334155":"#818cf8",opacity:les>=song.lessons.length-1?.4:1}}>Suivante →</Btn>
       </div>}
     </div>
-    </SlotsCtx.Provider>);
+    </SlotsCtx.Provider>
+    </ResponsiveCtx.Provider>);
 }
