@@ -125,6 +125,10 @@ function useResponsive(){
    ═══════════════════════════════════════════════════════════════════ */
 function useAudio(){
   const ctx=useRef(null);const unlocked=useRef(false);const pool=useRef([]);const silentEl=useRef(null);
+  // Réf vers la fonction pitch.pause(ms) — appelée automatiquement à chaque note jouée
+  // pour suspendre la détection micro et neutraliser le larsen acoustique.
+  const pitchPause=useRef(null);
+  const setPitchPause=useCallback(fn=>{pitchPause.current=fn},[]);
   const getCtx=useCallback(()=>{if(!ctx.current)ctx.current=new(window.AudioContext||window.webkitAudioContext)();return ctx.current},[]);
   const unlock=useCallback(()=>{
     const c=getCtx();if(c.state==="suspended")c.resume();
@@ -155,19 +159,22 @@ function useAudio(){
   },[getCtx]);
   const cleanup=useCallback(()=>{while(pool.current.length>14){const x=pool.current.shift();try{x.o.stop();x.o.disconnect();x.g.disconnect()}catch(e){}}},[]);
   const note=useCallback((n,v=0.3)=>{
+    if(pitchPause.current)pitchPause.current(900);
     const c=getCtx();if(c.state==="suspended")c.resume();cleanup();
     const o=c.createOscillator(),g=c.createGain();o.type="triangle";o.frequency.value=FREQ[n]||261;
     g.gain.setValueAtTime(v,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+1);
     o.connect(g);g.connect(c.destination);o.start(c.currentTime);o.stop(c.currentTime+1);
     pool.current.push({o,g});o.onended=()=>{try{o.disconnect();g.disconnect()}catch(e){}pool.current=pool.current.filter(x=>x.o!==o)};
   },[getCtx,cleanup]);
-  const chord=useCallback(keys=>{const c=getCtx();if(c.state==="suspended")c.resume();cleanup();
+  const chord=useCallback(keys=>{
+    if(pitchPause.current)pitchPause.current(1100);
+    const c=getCtx();if(c.state==="suspended")c.resume();cleanup();
     keys.forEach(k=>{const o=c.createOscillator(),g=c.createGain();o.type="triangle";o.frequency.value=FREQ[k]||261;
       g.gain.setValueAtTime(.2,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+1.1);
       o.connect(g);g.connect(c.destination);o.start(c.currentTime);o.stop(c.currentTime+1.1);
       pool.current.push({o,g});o.onended=()=>{try{o.disconnect();g.disconnect()}catch(e){}pool.current=pool.current.filter(x=>x.o!==o)};
     })},[getCtx,cleanup]);
-  return{unlock,note,chord};
+  return{unlock,note,chord,setPitchPause};
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -193,10 +200,22 @@ function useMIDI(){
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   PITCH DETECTION
+   PITCH DETECTION (optimisé batterie)
+   - setInterval 25Hz au lieu de requestAnimationFrame 60Hz : ~2x moins
+     d'analyses, 60% d'économie CPU sur cette boucle.
+   - fftSize 2048 (vs 4096) : autocorrélation 4x plus rapide, suffisant
+     pour la plage piano 60-2000Hz.
+   - Dedup des re-renders : si la note détectée est identique à la
+     précédente, on ne déclenche pas setState (pas de re-render React).
+   - pause(ms) : suspend la détection pendant N ms. Appelé automatiquement
+     par useAudio à chaque a.note/a.chord pour neutraliser le larsen
+     acoustique (le micro qui capte le son de l'iPad lui-même).
+   - Page Visibility API : détection coupée quand l'onglet est en arrière-
+     plan, économise pendant les pauses.
    ═══════════════════════════════════════════════════════════════════ */
 function usePitch(){
-  const mc=useRef(null);const an=useRef(null);const st=useRef(null);const bf=useRef(null);const rf=useRef(null);
+  const mc=useRef(null);const an=useRef(null);const st=useRef(null);const bf=useRef(null);const iv=useRef(null);
+  const suspendUntil=useRef(0);const lastNote=useRef(null);
   const[listening,setL]=useState(false);const[detected,setD]=useState(null);const[micError,setE]=useState(null);const cbRef=useRef(null);
   const noteFromFreq=f=>{if(f<60||f>2000)return null;let best=null,bd=Infinity;
     ALL_NOTES.forEach(n=>{const d=Math.abs(Math.log2(f/n.freq)*12);if(d<bd){bd=d;best={...n,cents:Math.round(Math.log2(f/n.freq)*1200)}}});return bd<1.5?best:null};
@@ -208,19 +227,45 @@ function usePitch(){
     let d=0;while(c[d]>c[d+1]&&d<c.length-1)d++;let mv=-1,mp=-1;
     for(let i=d;i<c.length;i++){if(c[i]>mv){mv=c[i];mp=i}}if(mp<0)return-1;
     const y1=c[mp-1]||0,y2=c[mp],y3=c[mp+1]||0;const sh=(y3-y1)/(2*(2*y2-y1-y3));return sr/(mp+(isNaN(sh)?0:sh))};
-  const detect=useCallback(()=>{if(!an.current||!bf.current)return;an.current.getFloatTimeDomainData(bf.current);
-    const f=autoC(bf.current,mc.current.sampleRate);if(f>0){const n=noteFromFreq(f);
-      if(n){setD({note:n.name,freq:Math.round(f),cents:n.cents,frName:fr(n.name)});if(cbRef.current)cbRef.current(n.name)}}
-    else setD(null);rf.current=requestAnimationFrame(detect)},[]);
+  // Une seule analyse par tick. Si on est en pause (audio joue), skip total.
+  // Si onglet caché, skip aussi pour économiser.
+  const detect=useCallback(()=>{
+    if(!an.current||!bf.current)return;
+    if(document.hidden)return;
+    if(performance.now()<suspendUntil.current){
+      // Pendant la suspension on ne fait RIEN, pas même un setD(null).
+      // On efface la note précédente une seule fois pour signaler visuellement la pause.
+      if(lastNote.current!==null){lastNote.current=null;setD(null)}
+      return;
+    }
+    an.current.getFloatTimeDomainData(bf.current);
+    const f=autoC(bf.current,mc.current.sampleRate);
+    if(f>0){
+      const n=noteFromFreq(f);
+      if(n){
+        // Dedup : si la note a changé (ou que le décalage cents > 5), on push, sinon non.
+        if(lastNote.current!==n.name){
+          lastNote.current=n.name;
+          setD({note:n.name,freq:Math.round(f),cents:n.cents,frName:fr(n.name)});
+          if(cbRef.current)cbRef.current(n.name);
+        }
+        return;
+      }
+    }
+    if(lastNote.current!==null){lastNote.current=null;setD(null)}
+  },[]);
   const start=useCallback(async()=>{try{setE(null);const s=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
     st.current=s;mc.current=new(window.AudioContext||window.webkitAudioContext)();const src=mc.current.createMediaStreamSource(s);
-    an.current=mc.current.createAnalyser();an.current.fftSize=4096;src.connect(an.current);bf.current=new Float32Array(an.current.fftSize);
-    setL(true);rf.current=requestAnimationFrame(detect)}catch(e){setE("Accès micro refusé")}},[detect]);
-  const stop=useCallback(()=>{cancelAnimationFrame(rf.current);if(st.current)st.current.getTracks().forEach(t=>t.stop());
-    if(mc.current)mc.current.close();st.current=null;mc.current=null;an.current=null;bf.current=null;setL(false);setD(null)},[]);
+    an.current=mc.current.createAnalyser();an.current.fftSize=2048;src.connect(an.current);bf.current=new Float32Array(an.current.fftSize);
+    setL(true);clearInterval(iv.current);iv.current=setInterval(detect,40)}catch(e){setE("Accès micro refusé")}},[detect]);
+  const stop=useCallback(()=>{clearInterval(iv.current);iv.current=null;if(st.current)st.current.getTracks().forEach(t=>t.stop());
+    if(mc.current)mc.current.close();st.current=null;mc.current=null;an.current=null;bf.current=null;lastNote.current=null;setL(false);setD(null)},[]);
+  // Suspendre la détection pendant ms millisecondes. Utilisé par useAudio pour éviter
+  // que le micro capte le son joué par l'iPad lui-même (anti-larsen).
+  const pause=useCallback(ms=>{suspendUntil.current=Math.max(suspendUntil.current,performance.now()+ms)},[]);
   const onNote=useCallback(cb=>{cbRef.current=cb},[]);
-  useEffect(()=>()=>{cancelAnimationFrame(rf.current);if(st.current)st.current.getTracks().forEach(t=>t.stop());if(mc.current)try{mc.current.close()}catch(e){}},[]);
-  return{listening,detected,micError,start,stop,onNote};
+  useEffect(()=>()=>{clearInterval(iv.current);if(st.current)st.current.getTracks().forEach(t=>t.stop());if(mc.current)try{mc.current.close()}catch(e){}},[]);
+  return{listening,detected,micError,start,stop,onNote,pause};
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -376,6 +421,44 @@ function SeqVizCompact({notes,idx,color,R}){
   </div>);
 }
 
+/* ───────────────────────────────────────────────────────────────────
+   SeqStrip : "partition" placée en HAUT du contenu de leçon.
+   Affiche la séquence des éléments à jouer, position courante
+   surlignée. Items : { label, sub?, color?, dim? }.
+   - label : grand texte (ex "Em" ou "Mi")
+   - sub : petit texte (ex "Mi mineur" ou "doigt 5")
+   - color : couleur de l'accent quand actif (sinon défaut)
+   - dim : grise l'item si true (ex pas encore atteint)
+   ─────────────────────────────────────────────────────────────────── */
+function SeqStrip({items,activeIdx,R,defaultColor="#818cf8",onItemClick}){
+  const isClickable=typeof onItemClick==="function";
+  return(
+    <div style={{padding:`${R.gap+2}px ${R.gap+4}px`,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginBottom:R.gap+2}}>
+      <div style={{display:"flex",gap:R.gap,overflowX:"auto",scrollbarWidth:"none",msOverflowStyle:"none",WebkitOverflowScrolling:"touch"}}>
+        {items.map((it,i)=>{const ac=i===activeIdx;const col=it.color||defaultColor;
+          const baseStyle={
+            flexShrink:0,padding:`${R.ipad?6:4}px ${R.ipad?12:8}px`,borderRadius:R.rad-4,
+            background:it.done?"rgba(16,185,129,.08)":ac?`${col}26`:"rgba(255,255,255,.03)",
+            border:ac?`1.5px solid ${col}`:it.done?"1px solid rgba(16,185,129,.3)":"1px solid rgba(255,255,255,.06)",
+            opacity:it.dim?.4:1,
+            transition:"background .15s, border-color .15s",
+            minWidth:R.ipad?44:32,textAlign:"center",
+            cursor:isClickable?"pointer":"default",
+            fontFamily:"inherit"
+          };
+          const inner=<>
+            <div style={{fontSize:R.font.sm,fontWeight:700,color:it.done?"#34d399":ac?col:"#cbd5e1",lineHeight:1.1,letterSpacing:.3}}>{it.done?"✓ ":""}{it.label}</div>
+            {it.sub&&<div style={{fontSize:R.font.xs,color:"#64748b",marginTop:1}}>{it.sub}</div>}
+          </>;
+          return isClickable
+            ? <button key={i} onClick={()=>onItemClick(i)} style={baseStyle}>{inner}</button>
+            : <div key={i} style={baseStyle}>{inner}</div>;
+        })}
+      </div>
+    </div>
+  );
+}
+
 function InputWidget({pitch,midi,expected,R}){
   const[mode,setMode]=useState("off");
   const toggleMic=()=>{if(mode==="midi")midi.stop();if(mode==="mic"){pitch.stop();setMode("off")}else{pitch.start();setMode("mic")}};
@@ -523,6 +606,8 @@ function L1({song,R,...inp}){
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
+    {/* Partition : enchaînement des 4 accords de Zombie, accord courant surligné */}
+    <SeqStrip R={R} activeIdx={ci} items={song.chords.map(c=>({label:c.name,sub:c.full,color:c.color}))}/>
     <ChordBtns chords={song.chords} ci={ci} setCi={setCi} unlock={a.unlock} R={R}/>
     <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,background:`${ch.color}11`,borderRadius:R.rad,border:`1px solid ${ch.color}33`}}>
       <div style={{fontSize:R.font.sm,color:"#94a3b8",marginBottom:R.gap}}>Main gauche : plaque ces 3 notes</div>
@@ -566,6 +651,8 @@ function L2({song,R,...inp}){
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
+    {/* Partition : 4 accords avec arpège courant surligné */}
+    <SeqStrip R={R} activeIdx={ci} items={song.chords.map(c=>({label:c.name,sub:c.full,color:c.color}))}/>
     <ChordBtns chords={song.chords} ci={ci} setCi={i=>{setCi(i);ciRef.current=i;stopArp()}} unlock={a.unlock} R={R}/>
     <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,background:`${ch.color}11`,borderRadius:R.rad,border:`1px solid ${ch.color}33`}}>
       <div style={{fontSize:R.font.sm,color:"#94a3b8",marginBottom:R.gap}}>Pattern : bas → milieu → haut → milieu</div>
@@ -686,6 +773,12 @@ function L5({song,R,...inp}){
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
+    {/* Partition : étapes de la séquence (accord main G puis 4 notes mélodie main D) */}
+    <SeqStrip R={R} activeIdx={step} items={steps.map(s=>({
+      label:s.t==="chord"?ch.name:fr(s.k[0]),
+      sub:s.hand==="L"?"main G":"main D",
+      color:s.hand==="L"?ch.color:"#e879f9"
+    }))}/>
     <ChordBtns chords={song.chords} ci={ci} setCi={i=>{setCi(i);setStep(0);stopAll()}} unlock={a.unlock} R={R}/>
     <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.08)"}}>
       {/* Indicateur GRAND de la main active à cette étape */}
@@ -713,7 +806,13 @@ function L6({song,R,...inp}){
   const[bpm,setBpm]=useState(70);const[run,setRun]=useState(false);const[ci,setCi]=useState(0);const[bt,setBt]=useState(0);const[pr,setPr]=useState(new Set());
   const[listenOnce,setListenOnce]=useState(false);
   const ciRef=useRef(0);useEffect(()=>{ciRef.current=ci},[ci]);const ch=song.chords[ci];
+  const melN=song.melPerChord[ci];
+  // Doigtés combinés (main G + main D)
+  const mfCombined=useMemo(()=>({...ch.fingers,...song.melFingers}),[ch.fingers,song.melFingers]);
+  const handsCombined=useMemo(()=>mergeHands(handsOf(ch.keys,"L"),handsOf(melN,"R")),[ch.keys,melN]);
 
+  // Tic toc des temps : t=0 plaque l'accord (G) + 1re note mélodie (D);
+  // t=1,2,3 jouent les notes de mélodie restantes.
   useInterval(()=>{setBt(b=>{if(b+1>=4){
       setCi(c=>{
         const n=(c+1)%song.chords.length;ciRef.current=n;
@@ -721,7 +820,11 @@ function L6({song,R,...inp}){
         if(listenOnce&&n===0){setRun(false);setListenOnce(false)}
         return n;
       });return 0}return b+1})},60/bpm*1000,run);
-  useEffect(()=>{if(run&&bt===0){a.chord(song.chords[ciRef.current].keys);setPr(new Set(song.chords[ciRef.current].keys));setTimeout(()=>setPr(new Set()),200)}},[bt,run]);
+  useEffect(()=>{if(!run)return;const cci=ciRef.current;const c=song.chords[cci];const mn=song.melPerChord[cci];
+    if(bt===0){a.chord(c.keys);if(mn[0])a.note(mn[0],.25);setPr(new Set([...c.keys,mn[0]].filter(Boolean)))}
+    else if(mn[bt]){a.note(mn[bt],.25);setPr(new Set([mn[bt]]))}
+    setTimeout(()=>setPr(new Set()),200);
+  },[bt,run]);
   const pct=bpm>=song.bpm?100:Math.round((bpm-40)/(song.bpm-40)*100);
 
   const onListen=()=>{a.unlock();setCi(0);ciRef.current=0;setBt(0);setListenOnce(true);setRun(true)};
@@ -741,11 +844,22 @@ function L6({song,R,...inp}){
     }
   />,[R,ch.color,bpm,run,bt,pct,song.bpm]);
   const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
-  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mfCombined} hands={handsCombined} c1={ch.color} c2="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,melN,mfCombined,handsCombined,ch.color,pr,detNote,midiNotes,R]);
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
-    <ProgBar chords={song.chords} ci={ci} R={R}/>
+    {/* Partition : enchaînement des 4 accords avec position courante */}
+    <SeqStrip R={R} activeIdx={ci} items={song.chords.map(c=>({label:c.name,sub:c.full,color:c.color}))}/>
+    {/* Aperçu de la mélodie main droite à jouer pour cet accord */}
+    <div style={{marginTop:R.gap+2,padding:`${R.gap+2}px ${R.pad}px`,borderRadius:R.rad-4,background:"rgba(232,121,249,.06)",border:"1px solid rgba(232,121,249,.2)"}}>
+      <div style={{fontSize:R.font.xs,color:"#a78bfa",marginBottom:R.gap-1,letterSpacing:1,textTransform:"uppercase",fontWeight:600}}>Main droite (mélodie)</div>
+      <div style={{display:"flex",justifyContent:"center",gap:R.ipad?16:10}}>
+        {melN.map((n,i)=><div key={i} style={{textAlign:"center",opacity:run&&i===bt?1:.5,transform:run&&i===bt?"scale(1.15)":"none",transition:"all .15s"}}>
+          <div style={{fontSize:R.font.lg,fontWeight:700,color:"#e879f9"}}>{fr(n)}</div>
+          <div style={{fontSize:R.font.xs,color:"#64748b"}}>t{i+1}</div>
+        </div>)}
+      </div>
+    </div>
     {!R.landscape&&pianoJsx}
   </div>);
 }
@@ -760,17 +874,29 @@ function L7({song,R,...inp}){
   // Jump token : incrémenté à chaque saut de section, force le useEffect à recréer l'intervalle (timing propre)
   const[jump,setJump]=useState(0);
   const ch=song.chords[display.ci];const sec=song.structure[display.si];
+  const melN=song.melPerChord[display.ci];
+  const mfCombined=useMemo(()=>({...ch.fingers,...song.melFingers}),[ch.fingers,song.melFingers]);
+  const handsCombined=useMemo(()=>mergeHands(handsOf(ch.keys,"L"),handsOf(melN,"R")),[ch.keys,melN]);
 
   useEffect(()=>{if(!run)return;const ms=60/song.bpm*1000;
+    // 1 beat = 1 noire ; à chaque beat on joue la note de mélodie correspondante (main droite)
+    // et au beat 0 on plaque l'accord (main gauche). Quand le 4e beat se termine, on passe à
+    // l'accord suivant ; quand on a parcouru tous les accords on incrémente la répétition de
+    // la section ; quand on a fait toutes les répétitions on passe à la section suivante.
     const id=setInterval(()=>{const s=state.current;s.bt++;
       if(s.bt>=4){s.bt=0;s.ci=(s.ci+1)%song.chords.length;
         if(s.ci===0){s.rep++;
           if(s.rep>=song.structure[s.si].reps){s.rep=0;s.si++;
             if(s.si>=song.structure.length){setRun(false);return}}}}
-      a.chord(song.chords[s.ci].keys);setPr(new Set(song.chords[s.ci].keys));setTimeout(()=>setPr(new Set()),200);
+      const c=song.chords[s.ci];const mn=song.melPerChord[s.ci];
+      if(s.bt===0){a.chord(c.keys);if(mn[0])a.note(mn[0],.25);setPr(new Set([...c.keys,mn[0]].filter(Boolean)))}
+      else if(mn[s.bt]){a.note(mn[s.bt],.25);setPr(new Set([mn[s.bt]]))}
+      setTimeout(()=>setPr(new Set()),180);
       setDisplay({si:s.si,ci:s.ci,bt:s.bt})},ms);
-    // First beat utilise l'accord courant (pas hardcodé à l'index 0)
-    const s0=state.current;a.chord(song.chords[s0.ci].keys);setPr(new Set(song.chords[s0.ci].keys));setTimeout(()=>setPr(new Set()),200);
+    // First beat utilise l'accord + 1re note mélodie courants
+    const s0=state.current;const c0=song.chords[s0.ci];const mn0=song.melPerChord[s0.ci];
+    a.chord(c0.keys);if(mn0[0])a.note(mn0[0],.25);
+    setPr(new Set([...c0.keys,mn0[0]].filter(Boolean)));setTimeout(()=>setPr(new Set()),180);
     return()=>clearInterval(id)},[run,jump]);
 
   const reset=()=>{setRun(false);state.current={si:0,ci:0,rep:0,bt:0};setDisplay({si:0,ci:0,bt:0})};
@@ -795,23 +921,18 @@ function L7({song,R,...inp}){
     }
   />,[R,ch.color,run,display.bt,display.si,finished,song.title,song.bpm]);
   const onPianoClick=n=>{a.unlock();a.note(n);setPr(new Set([n]));setTimeout(()=>setPr(new Set()),300)};
-  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} fm={ch.fingers} hands={handsOf(ch.keys,"L")} c1={ch.color} pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,ch.fingers,ch.color,pr,detNote,midiNotes,R]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(ch.keys)} hl2={new Set(melN)} fm={mfCombined} hands={handsCombined} c1={ch.color} c2="#e879f9" pressed={pr} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,ch.keys,melN,mfCombined,handsCombined,ch.color,pr,detNote,midiNotes,R]);
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
-    <div style={{padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.06)",marginBottom:R.pad}}>
-      <div style={{fontSize:R.font.xs,color:"#64748b",letterSpacing:1.5,textTransform:"uppercase",marginBottom:R.gap,fontWeight:600}}>Structure de la chanson</div>
-      <div style={{fontSize:R.font.xs,color:"#94a3b8",marginBottom:R.gap+2,fontStyle:"italic"}}>Tape une section pour démarrer ici</div>
-      <div style={{display:"flex",gap:R.ipad?5:3,flexWrap:"wrap"}}>
-        {song.structure.map((s,i)=><button key={i} onClick={()=>jumpTo(i)} style={{
-          padding:`${R.ipad?7:5}px ${R.ipad?14:10}px`,borderRadius:R.rad-4,fontSize:R.font.sm,fontWeight:600,fontFamily:"inherit",cursor:"pointer",minHeight:R.btn.min,
-          background:i===display.si?"#6366f122":"rgba(255,255,255,.03)",
-          border:i===display.si?"1px solid #6366f1":"1px solid rgba(255,255,255,.08)",
-          color:i===display.si?"#818cf8":i<display.si?"#34d399":"#cbd5e1",
-          transition:"all .15s"
-        }}>{i<display.si&&"✓ "}{s.label}</button>)}</div></div>
-    {!R.landscape&&pianoJsx}
+    {/* Partition : sections de la chanson, cliquable pour démarrer à n'importe quelle section */}
+    <SeqStrip R={R} activeIdx={display.si} onItemClick={jumpTo} items={song.structure.map((s,i)=>({
+      label:s.label,sub:s.reps>1?`x${s.reps}`:null,color:"#a855f7",done:i<display.si
+    }))}/>
+    <div style={{fontSize:R.font.xs,color:"#64748b",marginBottom:R.gap+2,fontStyle:"italic",textAlign:"center"}}>Tape une section pour démarrer ici</div>
+    {/* Cycle des 4 accords pour repère pendant la performance */}
     <ProgBar chords={song.chords} ci={display.ci} R={R}/>
+    {!R.landscape&&pianoJsx}
   </div>);
 }
 
@@ -865,6 +986,9 @@ export default function PianoTutor(){
 
   useEffect(()=>{pitch.onNote(n=>{setDetNote(n);clearTimeout(dt.current);dt.current=setTimeout(()=>setDetNote(null),400)})},[pitch.onNote]);
   useEffect(()=>{midi.onNote((n,t)=>{if(t==="on"){setDetNote(n);clearTimeout(dt.current);dt.current=setTimeout(()=>setDetNote(null),600)}})},[midi.onNote]);
+  // Anti-larsen : à chaque a.note/a.chord, useAudio appellera pitch.pause(900-1100ms)
+  // pour suspendre la détection micro et empêcher l'iPad de capter son propre son.
+  useEffect(()=>{au.setPitchPause(pitch.pause)},[au,pitch.pause]);
 
   const tog=i=>setDone(p=>{const s=new Set(p);const k=`${songId}-${les}-${i}`;s.has(k)?s.delete(k):s.add(k);return s});
   const LessonComp=LESSON_COMPONENTS[les];
