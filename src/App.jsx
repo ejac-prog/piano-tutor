@@ -164,7 +164,20 @@ function useResponsive(){
 
 /* ═══════════════════════════════════════════════════════════════════
    AUDIO ENGINE
+   - Attack ramp 6ms (gain 0 → v) : élimine le click d'attaque
+   - Release courte (note 0.55s, chord 0.75s) : évite la superposition
+     des résidus sur le beat suivant à 86 bpm (beat = 698ms)
+   - Active sur même fréquence : fade-out 30ms de l'ancien avant
+     d'attaquer le nouveau, pour neutraliser les battements quand on
+     rejoue rapidement la même note (cause principale du "son bizarre
+     une fois sur deux")
+   - getCtx avec resume synchrone garanti par unlock() qui doit être
+     appelé sur le premier geste utilisateur
    ═══════════════════════════════════════════════════════════════════ */
+const NOTE_ATTACK = 0.006;
+const NOTE_RELEASE = 0.55;
+const CHORD_RELEASE = 0.75;
+const FADE_OLD_MS = 0.03; // fade-out d'une note remplacée
 function useAudio(){
   const ctx=useRef(null);const unlocked=useRef(false);const pool=useRef([]);const silentEl=useRef(null);
   // Réf vers la fonction pitch.pause(ms) — appelée automatiquement à chaque note jouée
@@ -199,24 +212,78 @@ function useAudio(){
     }
     unlocked.current=true;
   },[getCtx]);
-  const cleanup=useCallback(()=>{while(pool.current.length>14){const x=pool.current.shift();try{x.o.stop();x.o.disconnect();x.g.disconnect()}catch(e){}}},[]);
+  // Fade-out rapide d'un oscillateur déjà actif sur la même note (évite battements)
+  const fadeOldByNote=useCallback((noteName,c)=>{
+    const t=c.currentTime;
+    pool.current.forEach(x=>{
+      if(x.note===noteName&&!x.releasing){
+        x.releasing=true;
+        try{
+          x.g.gain.cancelScheduledValues(t);
+          x.g.gain.setValueAtTime(x.g.gain.value,t);
+          x.g.gain.linearRampToValueAtTime(0,t+FADE_OLD_MS);
+          x.o.stop(t+FADE_OLD_MS+0.005);
+        }catch(e){}
+      }
+    });
+  },[]);
+  // Cleanup de garde-fou : si le pool dépasse une taille raisonnable
+  // (ne devrait plus arriver avec la release courte), purge en douceur.
+  const cleanup=useCallback(()=>{
+    while(pool.current.length>10){
+      const x=pool.current.shift();
+      try{
+        const t=x.o.context.currentTime;
+        x.g.gain.cancelScheduledValues(t);
+        x.g.gain.setValueAtTime(x.g.gain.value,t);
+        x.g.gain.linearRampToValueAtTime(0,t+FADE_OLD_MS);
+        x.o.stop(t+FADE_OLD_MS+0.005);
+      }catch(e){}
+    }
+  },[]);
   const note=useCallback((n,v=0.3)=>{
-    if(pitchPause.current)pitchPause.current(900);
-    const c=getCtx();if(c.state==="suspended")c.resume();cleanup();
-    const o=c.createOscillator(),g=c.createGain();o.type="triangle";o.frequency.value=FREQ[n]||261;
-    g.gain.setValueAtTime(v,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+1);
-    o.connect(g);g.connect(c.destination);o.start(c.currentTime);o.stop(c.currentTime+1);
-    pool.current.push({o,g});o.onended=()=>{try{o.disconnect();g.disconnect()}catch(e){}pool.current=pool.current.filter(x=>x.o!==o)};
-  },[getCtx,cleanup]);
+    if(pitchPause.current)pitchPause.current(700);
+    const c=getCtx();if(c.state==="suspended")c.resume();
+    cleanup();
+    fadeOldByNote(n,c);
+    const t=c.currentTime;
+    const o=c.createOscillator(),g=c.createGain();
+    o.type="triangle";o.frequency.value=FREQ[n]||261;
+    g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime(v,t+NOTE_ATTACK);
+    g.gain.exponentialRampToValueAtTime(.001,t+NOTE_RELEASE);
+    o.connect(g);g.connect(c.destination);
+    o.start(t);o.stop(t+NOTE_RELEASE+0.02);
+    const item={o,g,note:n,releasing:false};
+    pool.current.push(item);
+    o.onended=()=>{try{o.disconnect();g.disconnect()}catch(e){}pool.current=pool.current.filter(x=>x!==item)};
+  },[getCtx,cleanup,fadeOldByNote]);
   const chord=useCallback(keys=>{
-    if(pitchPause.current)pitchPause.current(1100);
-    const c=getCtx();if(c.state==="suspended")c.resume();cleanup();
-    keys.forEach(k=>{const o=c.createOscillator(),g=c.createGain();o.type="triangle";o.frequency.value=FREQ[k]||261;
-      g.gain.setValueAtTime(.2,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+1.1);
-      o.connect(g);g.connect(c.destination);o.start(c.currentTime);o.stop(c.currentTime+1.1);
-      pool.current.push({o,g});o.onended=()=>{try{o.disconnect();g.disconnect()}catch(e){}pool.current=pool.current.filter(x=>x.o!==o)};
-    })},[getCtx,cleanup]);
-  return{unlock,note,chord,setPitchPause};
+    if(pitchPause.current)pitchPause.current(900);
+    const c=getCtx();if(c.state==="suspended")c.resume();
+    cleanup();
+    const t=c.currentTime;
+    keys.forEach(k=>{
+      fadeOldByNote(k,c);
+      const o=c.createOscillator(),g=c.createGain();
+      o.type="triangle";o.frequency.value=FREQ[k]||261;
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(.2,t+NOTE_ATTACK);
+      g.gain.exponentialRampToValueAtTime(.001,t+CHORD_RELEASE);
+      o.connect(g);g.connect(c.destination);
+      o.start(t);o.stop(t+CHORD_RELEASE+0.02);
+      const item={o,g,note:k,releasing:false};
+      pool.current.push(item);
+      o.onended=()=>{try{o.disconnect();g.disconnect()}catch(e){}pool.current=pool.current.filter(x=>x!==item)};
+    });
+  },[getCtx,cleanup,fadeOldByNote]);
+  // Retour stabilisé : les 4 fonctions étant des useCallback stables, useMemo
+  // retourne toujours le MÊME objet. Crucial : sans ce useMemo, l'objet est recréé
+  // à chaque render de PianoTutor (par ex. quand pitch.detected change toutes les
+  // 40ms), ce qui invalide toute deps `[a, ...]` dans les useEffect des leçons et
+  // les fait redéclencher en boucle. En L2 et L6, ça créait un brouhaha continu
+  // car chaque redéclenchement appelait a.note/a.chord au render de PianoTutor.
+  return useMemo(()=>({unlock,note,chord,setPitchPause}),[unlock,note,chord,setPitchPause]);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -600,6 +667,70 @@ function ProgBar({chords,ci,R}){
   </div>);
 }
 
+/* ───────────────────────────────────────────────────────────────────
+   HandsStrip : encart unifié "Main G / Main D" utilisé dans toutes
+   les leçons. Chaque section (left ou right) peut être :
+   - compacte : { label, name, sub } → ex: "MAIN G / Em / Mi · Sol · Si"
+   - en notes : { label, notes, fingers? activeIdx? } → cellules avec
+     doigtés (apprentissage) ou position courante (défilement).
+   - labelColor optionnel pour distinguer la couleur du titre de
+     celle des notes (ex: "MAIN D" en violet pastel mais notes en rose).
+   ─────────────────────────────────────────────────────────────────── */
+function HandSection({section,R}){
+  if(!section)return null;
+  const labelColor=section.labelColor||section.color||"#a78bfa";
+  const mainColor=section.color||"#a78bfa";
+  const titleStyle={fontSize:R.font.xs,color:labelColor,letterSpacing:1,textTransform:"uppercase",fontWeight:600,marginBottom:2,textAlign:"center"};
+  // Mode notes : cellules par note, avec doigté ou position en sub
+  if(section.notes&&section.notes.length>0){
+    const hasActive=section.activeIdx!==undefined&&section.activeIdx>=0;
+    return(
+      <div>
+        <div style={titleStyle}>{section.label}</div>
+        <div style={{display:"flex",justifyContent:"center",gap:R.ipad?14:8}}>
+          {section.notes.map((n,i)=>{
+            const isActive=hasActive&&i===section.activeIdx;
+            return(
+              <div key={i} style={{
+                textAlign:"center",
+                opacity:hasActive&&!isActive?.5:1,
+                transform:hasActive&&isActive?"scale(1.15)":"none",
+                transition:"all .15s"
+              }}>
+                <div style={{fontSize:R.font.lg,fontWeight:700,color:mainColor,lineHeight:1}}>{fr(n)}</div>
+                <div style={{fontSize:R.font.xs,color:"#64748b",marginTop:2}}>
+                  {section.fingers?`doigt ${section.fingers[n]||"?"}`:`t${i+1}`}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+  // Mode compact : nom + sub
+  return(
+    <div style={{textAlign:"center",flexShrink:0}}>
+      <div style={titleStyle}>{section.label}</div>
+      <div style={{fontSize:R.font.lg,fontWeight:700,color:mainColor,lineHeight:1}}>{section.name}</div>
+      {section.sub&&<div style={{fontSize:R.font.xs,color:"#64748b",marginTop:2}}>{section.sub}</div>}
+    </div>
+  );
+}
+
+function HandsStrip({left,right,R}){
+  if(!left&&!right)return null;
+  return(
+    <div style={{marginTop:R.gap+2,marginBottom:R.gap+2,padding:`${R.gap+2}px ${R.pad}px`,borderRadius:R.rad-4,background:"rgba(232,121,249,.06)",border:"1px solid rgba(232,121,249,.2)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:R.ipad?28:14}}>
+        <HandSection section={left} R={R}/>
+        {left&&right&&(<div style={{width:1,height:R.ipad?52:36,background:"rgba(255,255,255,.1)",flexShrink:0}}/>)}
+        <HandSection section={right} R={R}/>
+      </div>
+    </div>
+  );
+}
+
 // L1 — Block chords
 function L1({song,R,...inp}){
   const{a,pitch,midi,detNote,midiNotes}=inp;
@@ -620,7 +751,14 @@ function L1({song,R,...inp}){
     }
     return b+1;
   }),beatMs(bpm),looping);
-  useEffect(()=>{if(looping&&bt===0)a.chord(song.chords[ciRef.current].keys)},[bt,looping,a,song.chords]);
+  useEffect(()=>{
+    if(!looping||bt!==0)return;
+    const c=song.chords[ciRef.current];
+    a.chord(c.keys);
+    setPr(new Set(c.keys));
+    const id=setTimeout(()=>setPr(new Set()),PRESS_FLASH_LONG_MS);
+    return()=>clearTimeout(id);
+  },[bt,looping,a,song.chords]);
 
   // Handlers stables : useCallback évite la recréation à chaque render et
   // permet aux useMemo en aval d'avoir des deps fiables.
@@ -645,15 +783,9 @@ function L1({song,R,...inp}){
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
-    {/* Partition : enchaînement des 4 accords de Zombie, accord courant surligné */}
-    <SeqStrip R={R} activeIdx={ci} items={song.chords.map(c=>({label:c.name,sub:c.full,color:c.color}))}/>
     <ChordBtns chords={song.chords} ci={ci} setCi={setCi} unlock={a.unlock} R={R}/>
-    <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,background:`${ch.color}11`,borderRadius:R.rad,border:`1px solid ${ch.color}33`}}>
-      <div style={{fontSize:R.font.sm,color:"#94a3b8",marginBottom:R.gap}}>Main gauche : plaque ces 3 notes</div>
-      <div style={{display:"flex",justifyContent:"center",gap:R.ipad?24:18}}>
-        {ch.keys.map(k=><div key={k} style={{textAlign:"center"}}><div style={{fontSize:R.font.xl,fontWeight:700,color:ch.color}}>{fr(k)}</div><div style={{fontSize:R.font.xs,color:"#64748b"}}>doigt {ch.fingers[k]}</div></div>)}</div>
-    </div>
     {!R.landscape&&pianoJsx}
+    <HandsStrip left={{label:`Main G : ${ch.name}`,notes:ch.keys,fingers:ch.fingers,color:ch.color}} R={R}/>
   </div>);
 }
 
@@ -679,14 +811,16 @@ function L2({song,R,...inp}){
     const stepMs=beatMs(bpm)/2; // double-croches : 8 notes = 1 mesure 4/4
     clearInterval(arRef.current);
     setArpP(true);
-    arRef.current=setInterval(()=>{
+    const step=()=>{
       const nn=song.chords[ciRef.current].arp;
       if(i>=nn.length) i=0;
       a.note(nn[i],.28);
       setIdx(i);
       setPr(new Set([nn[i]]));
       i++;
-    },stepMs);
+    };
+    step();
+    arRef.current=setInterval(step,stepMs);
   },[a,bpm,song.chords]);
   const stopArp=useCallback(()=>{
     clearInterval(arRef.current);
@@ -698,7 +832,8 @@ function L2({song,R,...inp}){
     if(!looping){setBt(0);setIdx(-1);setPr(new Set());return}
     let ni=0,chi=0;
     const stepMs=beatMs(bpm)/2;
-    const id=setInterval(()=>{
+    // Joue la première note immédiatement, puis cadence avec setInterval
+    const step=()=>{
       const c=song.chords[chi];
       if(ni>=c.arp.length){
         ni=0;
@@ -710,7 +845,9 @@ function L2({song,R,...inp}){
       setIdx(ni);
       setBt(Math.floor(ni/2));
       ni++;
-    },stepMs);
+    };
+    step();
+    const id=setInterval(step,stepMs);
     return()=>clearInterval(id);
   },[looping,bpm,a,song.chords]);
   useEffect(()=>()=>clearInterval(arRef.current),[]);
@@ -733,16 +870,10 @@ function L2({song,R,...inp}){
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
-    {/* Partition : 4 accords avec arpège courant surligné */}
-    <SeqStrip R={R} activeIdx={ci} items={song.chords.map(c=>({label:c.name,sub:c.full,color:c.color}))}/>
     <ChordBtns chords={song.chords} ci={ci} setCi={onChordChange} unlock={a.unlock} R={R}/>
-    <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,background:`${ch.color}11`,borderRadius:R.rad,border:`1px solid ${ch.color}33`}}>
-      <div style={{fontSize:R.font.sm,color:"#94a3b8",marginBottom:R.gap}}>Pattern : bas → milieu → haut → milieu</div>
-      <div style={{display:"flex",justifyContent:"center",gap:R.gap}}>
-        {ch.arp.slice(0,4).map((n,i)=><div key={i} style={{padding:`${R.ipad?6:4}px ${R.ipad?12:8}px`,borderRadius:R.rad-4,background:i===idx%4?`${ch.color}33`:"rgba(255,255,255,.05)",border:i===idx%4?`1px solid ${ch.color}`:"1px solid transparent"}}>
-          <div style={{fontSize:R.font.lg,fontWeight:700,color:ch.color}}>{fr(n)}</div></div>)}</div>
-    </div>
+    <SeqVizCompact notes={ch.arp.map(n=>({note:n,dur:1}))} idx={idx} color={ch.color} R={R}/>
     {!R.landscape&&pianoJsx}
+    <HandsStrip left={{label:"Main G",name:ch.name,sub:ch.keys.map(fr).join(" · "),color:ch.color}} R={R}/>
   </div>);
 }
 
@@ -766,7 +897,7 @@ function L3({song,R,...inp}){
     const stepMs=beatMs(L3_DEFAULT_BPM)*0.5; // double-croches
     clearInterval(r.current);
     setP(true);
-    r.current=setInterval(()=>{
+    const step=()=>{
       if(i>=song.riff.length){
         if(loopRef.current) i=0;
         else{
@@ -780,7 +911,9 @@ function L3({song,R,...inp}){
       if(n.note!=="_"){a.note(n.note,.35);setPr(new Set([n.note]))}
       else setPr(new Set());
       i++;
-    },stepMs);
+    };
+    step();
+    r.current=setInterval(step,stepMs);
   },[a,song.riff]);
   const playLoop=useCallback(()=>{
     a.unlock();
@@ -807,13 +940,9 @@ function L3({song,R,...inp}){
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
-    <div style={{padding:R.pad,marginBottom:R.pad,borderRadius:R.rad,background:"rgba(239,68,68,.06)",border:"1px solid rgba(239,68,68,.2)"}}>
-      <div style={{fontSize:R.font.sm+1,color:L3_COLOR,marginBottom:R.gap,fontWeight:600}}>Main droite : riff signature</div>
-      <div style={{display:"flex",justifyContent:"center",gap:R.ipad?18:14}}>
-        {song.riffNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg+2,fontWeight:700,color:L3_COLOR}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#fb923c"}}>doigt {song.melFingers[n]}</div></div>)}</div>
-    </div>
-    {!R.landscape&&pianoJsx}
     <SeqVizCompact notes={song.riff} idx={idx} color={L3_COLOR} R={R}/>
+    {!R.landscape&&pianoJsx}
+    <HandsStrip right={{label:"Main D : riff",notes:song.riffNotes,fingers:song.melFingers,color:L3_COLOR,labelColor:"#a78bfa"}} R={R}/>
   </div>);
 }
 
@@ -838,7 +967,7 @@ function L4({song,R,...inp}){
     const stepMs=beatMs(L4_DEFAULT_BPM)*0.5;
     clearInterval(r.current);
     setP(true);
-    r.current=setInterval(()=>{
+    const step=()=>{
       if(i>=m.notes.length){
         if(loopRef.current) i=0;
         else{
@@ -852,7 +981,9 @@ function L4({song,R,...inp}){
       if(n.note!=="_"){a.note(n.note,.35);setPr(new Set([n.note]))}
       else setPr(new Set());
       i++;
-    },stepMs);
+    };
+    step();
+    r.current=setInterval(step,stepMs);
   },[a,m.notes]);
   const playLoop=useCallback(()=>{
     loopRef.current=true;playOnce();loopRef.current=true;
@@ -879,13 +1010,9 @@ function L4({song,R,...inp}){
   return(<div>
     <div style={{display:"flex",gap:R.gap+2,justifyContent:"center",marginBottom:R.pad}}>
       {secs.map(k=><button key={k} onClick={()=>onSecChange(k)} style={{padding:`${R.ipad?10:7}px ${R.ipad?20:16}px`,borderRadius:R.rad,fontSize:R.font.sm+1,fontFamily:"inherit",fontWeight:600,minHeight:R.btn.min,border:sec===k?`1px solid ${RIGHT_HAND_COLOR}`:"1px solid #334155",background:sec===k?`${RIGHT_HAND_COLOR}22`:"transparent",color:sec===k?RIGHT_HAND_COLOR:"#94a3b8",cursor:"pointer"}}>{song.melody[k].label}</button>)}</div>
-    <div style={{padding:R.pad,marginBottom:R.pad,borderRadius:R.rad,background:"rgba(232,121,249,.06)",border:"1px solid rgba(232,121,249,.2)"}}>
-      <div style={{fontSize:R.font.sm+1,color:"#c084fc",marginBottom:R.gap,fontWeight:600}}>Main droite</div>
-      <div style={{display:"flex",justifyContent:"center",gap:R.ipad?18:14}}>
-        {song.melodyNotes.map(n=><div key={n} style={{textAlign:"center"}}><div style={{fontSize:R.font.lg,fontWeight:700,color:RIGHT_HAND_COLOR}}>{fr(n)}</div><div style={{fontSize:R.font.xs,color:"#a78bfa"}}>doigt {song.melFingers[n]}</div></div>)}</div>
-    </div>
-    {!R.landscape&&pianoJsx}
     <SeqVizCompact notes={m.notes} idx={idx} color={RIGHT_HAND_COLOR} R={R}/>
+    {!R.landscape&&pianoJsx}
+    <HandsStrip right={{label:"Main D : mélodie",notes:song.melodyNotes,fingers:song.melFingers,color:RIGHT_HAND_COLOR,labelColor:"#a78bfa"}} R={R}/>
   </div>);
 }
 
@@ -929,6 +1056,7 @@ function L5({song,R,...inp}){
     setStep(0);
     a.chord(steps[0].k);
     setPr(new Set(steps[0].k));
+    setTimeout(()=>setPr(new Set()),350);
     seqRef.current=setInterval(()=>{
       i++;
       if(i>=steps.length){
@@ -973,12 +1101,6 @@ function L5({song,R,...inp}){
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
-    {/* Partition : étapes de la séquence (accord main G puis 4 notes mélodie main D) */}
-    <SeqStrip R={R} activeIdx={step} items={steps.map(s=>({
-      label:s.t==="chord"?ch.name:fr(s.k[0]),
-      sub:s.hand==="L"?"main G":"main D",
-      color:s.hand==="L"?ch.color:RIGHT_HAND_COLOR
-    }))}/>
     <ChordBtns chords={song.chords} ci={ci} setCi={onChordChange} unlock={a.unlock} R={R}/>
     <div style={{textAlign:"center",marginBottom:R.pad,padding:R.pad,borderRadius:R.rad,background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.08)"}}>
       {/* Indicateur GRAND de la main active à cette étape */}
@@ -997,6 +1119,10 @@ function L5({song,R,...inp}){
       </div>
     </div>
     {!R.landscape&&pianoJsx}
+    <HandsStrip 
+      left={{label:"Main G",name:ch.name,sub:ch.keys.map(fr).join(" · "),color:ch.color}}
+      right={{label:"Main D",notes:melN,activeIdx:step>=1?step-1:-1,color:RIGHT_HAND_COLOR,labelColor:"#a78bfa"}}
+      R={R}/>
   </div>);
 }
 
@@ -1078,19 +1204,14 @@ function L6({song,R,...inp}){
   useSlots(top,side,R.landscape?pianoJsx:null);
 
   return(<div>
-    {/* Partition : enchaînement des 4 accords avec position courante */}
+    {/* Partition : enchaînement des 4 accords avec position courante (niveau structure) */}
     <SeqStrip R={R} activeIdx={ci} items={song.chords.map(c=>({label:c.name,sub:c.full,color:c.color}))}/>
-    {/* Aperçu de la mélodie main droite à jouer pour cet accord */}
-    <div style={{marginTop:R.gap+2,padding:`${R.gap+2}px ${R.pad}px`,borderRadius:R.rad-4,background:"rgba(232,121,249,.06)",border:"1px solid rgba(232,121,249,.2)"}}>
-      <div style={{fontSize:R.font.xs,color:"#a78bfa",marginBottom:R.gap-1,letterSpacing:1,textTransform:"uppercase",fontWeight:600}}>Main droite (mélodie)</div>
-      <div style={{display:"flex",justifyContent:"center",gap:R.ipad?16:10}}>
-        {melN.map((n,i)=><div key={i} style={{textAlign:"center",opacity:run&&i===bt?1:.5,transform:run&&i===bt?"scale(1.15)":"none",transition:"all .15s"}}>
-          <div style={{fontSize:R.font.lg,fontWeight:700,color:RIGHT_HAND_COLOR}}>{fr(n)}</div>
-          <div style={{fontSize:R.font.xs,color:"#64748b"}}>t{i+1}</div>
-        </div>)}
-      </div>
-    </div>
     {!R.landscape&&pianoJsx}
+    {/* Aperçu deux mains : accord (main G) + 4 notes mélodie (main D) avec position */}
+    <HandsStrip 
+      left={{label:"Main G",name:ch.name,sub:ch.keys.map(fr).join(" · "),color:ch.color}}
+      right={{label:"Main D",notes:melN,activeIdx:run?bt:-1,color:RIGHT_HAND_COLOR,labelColor:"#a78bfa"}}
+      R={R}/>
   </div>);
 }
 
@@ -1204,6 +1325,11 @@ function L7({song,R,...inp}){
     {/* Cycle des 4 accords pour repère pendant la performance */}
     <ProgBar chords={song.chords} ci={display.ci} R={R}/>
     {!R.landscape&&pianoJsx}
+    {/* Aperçu deux mains qui défile avec l'avancée de la chanson */}
+    <HandsStrip 
+      left={{label:"Main G",name:ch.name,sub:ch.keys.map(fr).join(" · "),color:ch.color}}
+      right={{label:"Main D",notes:melN,activeIdx:run?display.bt:-1,color:RIGHT_HAND_COLOR,labelColor:"#a78bfa"}}
+      R={R}/>
   </div>);
 }
 
