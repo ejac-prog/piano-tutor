@@ -97,6 +97,9 @@ const SONGS = {
       {t:"Performance",s:"La chanson au complet",icon:"⑦",wk:"Sem. 4",
        goals:["Enchaîner intro → couplet → refrain","Jouer la structure complète","Le faire devant tes amis"],
        tip:"Suis le guide. Intro, couplet, refrain, couplet, refrain, outro."},
+      {t:"Solfège rythmé",s:"Lis les notes en défilement",icon:"⑧",wk:"Sem. 4+",
+       goals:["Lire les notes en solfège pendant qu'elles défilent","Garder le rythme sans qu'il s'arrête","Faire un couplet complet sans pause"],
+       tip:"Si tu rates ou joues la mauvaise note, le défilement s'arrête. Pour reprendre, joue la bonne note."},
     ],
   },
   thousandYears: {
@@ -167,6 +170,9 @@ const SONGS = {
       {t:"Performance",s:"La chanson au complet",icon:"⑦",wk:"Sem. 4",
        goals:["Enchaîner intro → couplet → refrain","Jouer la structure complète","Le faire devant tes amis"],
        tip:"Suis le guide. Intro, couplet, refrain, couplet, refrain, outro."},
+      {t:"Solfège rythmé",s:"Lis les notes en défilement",icon:"⑧",wk:"Sem. 4+",
+       goals:["Lire les notes en solfège pendant qu'elles défilent","Garder le rythme sans qu'il s'arrête","Faire un couplet complet sans pause"],
+       tip:"Si tu rates ou joues la mauvaise note, le défilement s'arrête. Pour reprendre, joue la bonne note."},
     ],
   },
 };
@@ -1434,9 +1440,197 @@ function Timer({R,compact}){
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   L8 — Solfège rythmé
+   Défilement horizontal des notes en solfège (Do, Ré, Mi…). La piste
+   avance à tempo. Si l'utilisateur joue la mauvaise note ou rate la
+   fenêtre, le défilement se met en pause. Pour reprendre, il faut
+   jouer la note attendue (au micro ou en MIDI).
+   ═══════════════════════════════════════════════════════════════════ */
+const L8_COLOR = "#22c55e";
+const L8_DEFAULT_BPM = 50;
+const L8_SLOT_W = 64;
+
+function L8({song,R,...inp}){
+  const{a,pitch,midi,detNote,midiNotes}=inp;
+  const sections=Object.keys(song.melody);
+  const[sec,setSec]=useState(sections[0]);
+  const seq=song.melody[sec].notes;
+  const[bpm,setBpm]=useState(L8_DEFAULT_BPM);
+  const[idx,setIdx]=useState(0);
+  const[running,setRunning]=useState(false);
+  const[paused,setPaused]=useState(false);
+  const[flash,setFlash]=useState(null); // 'good' | 'bad' | null
+
+  const idxRef=useRef(0);
+  const pausedRef=useRef(false);
+  const hitRef=useRef(false); // a-t-on joué la bonne note pour la fenêtre courante ?
+  const seqRef=useRef(seq);
+  useEffect(()=>{seqRef.current=seq},[seq]);
+
+  const stepMs=beatMs(bpm)*0.5; // double-croche = 1 slot
+  const cur=seq[idx]?.note;
+
+  // Détection : à chaque changement de detNote / midiNotes, on regarde si
+  // l'entrée correspond à la note attendue. Si oui, on marque "hit" pour la
+  // fenêtre courante (le tick suivant pourra avancer). Si on est en pause,
+  // ça relance immédiatement la piste.
+  useEffect(()=>{
+    if(!running) return;
+    const exp=seqRef.current[idxRef.current]?.note;
+    if(!exp||exp==="_") return;
+    const det=detNote||(midiNotes&&midiNotes.size>0?Array.from(midiNotes).pop():null);
+    if(!det) return;
+    if(det===exp){
+      hitRef.current=true;
+      setFlash("good");
+      setTimeout(()=>setFlash(f=>f==="good"?null:f),200);
+      if(pausedRef.current){
+        // Reprise : on avance immédiatement à la note suivante
+        pausedRef.current=false;
+        setPaused(false);
+        const next=idxRef.current+1;
+        if(next>=seqRef.current.length){
+          setRunning(false);return;
+        }
+        idxRef.current=next;
+        setIdx(next);
+        hitRef.current=false;
+      }
+    } else {
+      setFlash("bad");
+      setTimeout(()=>setFlash(f=>f==="bad"?null:f),200);
+    }
+  },[detNote,midiNotes,running]);
+
+  // Tick rythmique : tous les stepMs, on essaie d'avancer d'un slot.
+  // Si la note courante n'a pas été jouée dans la fenêtre, on met en pause.
+  useEffect(()=>{
+    if(!running) return;
+    const tick=()=>{
+      if(pausedRef.current) return;
+      const s=seqRef.current;
+      const c=s[idxRef.current];
+      // Si c'est un silence, on avance sans rien attendre
+      if(c&&c.note!=="_"&&!hitRef.current){
+        pausedRef.current=true;
+        setPaused(true);
+        setFlash("bad");
+        return;
+      }
+      hitRef.current=false;
+      const next=idxRef.current+1;
+      if(next>=s.length){
+        setRunning(false);
+        idxRef.current=0;setIdx(0);
+        return;
+      }
+      idxRef.current=next;
+      setIdx(next);
+    };
+    const id=setInterval(tick,stepMs);
+    return()=>clearInterval(id);
+  },[running,stepMs]);
+
+  const onStart=useCallback(()=>{
+    a.unlock();
+    idxRef.current=0;setIdx(0);
+    pausedRef.current=false;setPaused(false);
+    hitRef.current=false;
+    setFlash(null);
+    setRunning(true);
+  },[a]);
+  const onStop=useCallback(()=>{
+    setRunning(false);
+    pausedRef.current=false;setPaused(false);
+    hitRef.current=false;
+    idxRef.current=0;setIdx(0);
+    setFlash(null);
+  },[]);
+  const onSecChange=useCallback(k=>{setSec(k);onStop()},[onStop]);
+  const onPianoClick=useCallback(n=>{a.unlock();a.note(n)},[a]);
+
+  const top=useMemo(()=><InputWidget pitch={pitch} midi={midi} expected={running&&cur!=="_"?cur:null} R={R}/>,[pitch,midi,cur,running,R]);
+  const side=useMemo(()=><LessonControls R={R} color={L8_COLOR} bpm={bpm} setBpm={setBpm} minBpm={30} maxBpm={100} onPractice={running?null:onStart} onStop={running?onStop:null} isPracticing={running}/>,[R,bpm,running,onStart,onStop]);
+  const pianoJsx=useMemo(()=><Piano keys={song.keys} hl={new Set(song.melodyNotes)} fm={song.melFingers} hands={handsOf(song.melodyNotes,"R")} c1={L8_COLOR} pressed={new Set()} detectedNote={detNote} midiNotes={midiNotes} R={R} onClick={onPianoClick}/>,[song.keys,song.melodyNotes,song.melFingers,detNote,midiNotes,R,onPianoClick]);
+  useSlots(top,side,R.landscape?pianoJsx:null);
+
+  // Piste défilante : la track est translatée pour placer le slot courant
+  // sous la ligne de jeu (au centre du conteneur).
+  const trackJsx=(
+    <div style={{
+      padding:R.pad,borderRadius:R.rad,
+      background:"rgba(255,255,255,.03)",
+      border:`1px solid ${flash==="good"?"rgba(34,197,94,.5)":flash==="bad"?"rgba(239,68,68,.5)":"rgba(255,255,255,.06)"}`,
+      marginTop:R.pad,marginBottom:R.pad,
+      position:"relative",overflow:"hidden",height:R.ipad?120:100,
+      transition:"border-color .15s"
+    }}>
+      {/* Ligne de jeu au centre */}
+      <div style={{
+        position:"absolute",left:"50%",top:8,bottom:8,width:3,
+        background:paused?"#ef4444":"#22c55e",
+        boxShadow:`0 0 14px ${paused?"#ef4444":"#22c55e"}`,
+        transform:"translateX(-1.5px)",zIndex:5,borderRadius:2
+      }}/>
+      {/* Indicateur en haut */}
+      <div style={{
+        position:"absolute",left:"50%",top:2,transform:"translateX(-50%)",zIndex:6,
+        fontSize:R.font.xs-1,letterSpacing:1.5,fontWeight:700,
+        color:paused?"#ef4444":"#22c55e",
+        textTransform:"uppercase"
+      }}>{paused?"En pause":running?"Joue":"Prêt"}</div>
+      {/* Piste qui défile */}
+      <div style={{
+        display:"flex",gap:6,height:"100%",alignItems:"center",
+        transform:`translateX(calc(50% - ${(idx+0.5)*L8_SLOT_W}px))`,
+        transition:paused?"none":`transform ${stepMs}ms linear`,
+        willChange:"transform"
+      }}>
+        {seq.map((n,i)=>{
+          const past=i<idx;
+          const cur=i===idx;
+          const isRest=n.note==="_";
+          return(
+            <div key={i} style={{
+              flexShrink:0,width:L8_SLOT_W-6,height:"68%",borderRadius:R.rad-2,
+              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+              background:cur
+                ?(paused?"rgba(239,68,68,.25)":"rgba(34,197,94,.25)")
+                :isRest?"transparent":"rgba(255,255,255,.05)",
+              border:cur
+                ?`2px solid ${paused?"#ef4444":"#22c55e"}`
+                :isRest?"1px dashed rgba(255,255,255,.1)":"1px solid rgba(255,255,255,.08)",
+              opacity:past?.35:1,
+              transition:"background .15s, border-color .15s, opacity .15s"
+            }}>
+              {isRest
+                ?<div style={{fontSize:R.font.lg,color:"#475569",fontWeight:700}}>·</div>
+                :<>
+                  <div style={{fontSize:R.font.md+2,fontWeight:700,color:cur?"#fff":"#cbd5e1",lineHeight:1}}>{fr(n.note)}</div>
+                  <div style={{fontSize:R.font.xs-1,color:"#64748b",marginTop:3,letterSpacing:.5}}>{n.note}</div>
+                </>
+              }
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return(<div>
+    <div style={{display:"flex",gap:R.gap+2,justifyContent:"center",marginBottom:R.pad}}>
+      {sections.map(k=><button key={k} onClick={()=>onSecChange(k)} style={{padding:`${R.ipad?10:7}px ${R.ipad?20:16}px`,borderRadius:R.rad,fontSize:R.font.sm+1,fontFamily:"inherit",fontWeight:600,minHeight:R.btn.min,border:sec===k?`1px solid ${L8_COLOR}`:"1px solid #334155",background:sec===k?`${L8_COLOR}22`:"transparent",color:sec===k?L8_COLOR:"#94a3b8",cursor:"pointer"}}>{song.melody[k].label}</button>)}
+    </div>
+    {trackJsx}
+    {!R.landscape&&pianoJsx}
+    <HandsStrip right={{label:"Main D : à jouer",notes:song.melodyNotes,fingers:song.melFingers,color:L8_COLOR,labelColor:"#a78bfa"}} R={R}/>
+  </div>);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    MAIN APP
    ═══════════════════════════════════════════════════════════════════ */
-const LESSON_COMPONENTS=[L1,L2,L3,L4,L5,L6,L7];
+const LESSON_COMPONENTS=[L1,L2,L3,L4,L5,L6,L7,L8];
 
 export default function PianoTutor(){
   const songKeys=Object.keys(SONGS);
@@ -1461,7 +1655,7 @@ export default function PianoTutor(){
   const LessonComp=LESSON_COMPONENTS[les];
 
   // Couleur de l'accent de la leçon active (utilisée pour onglet sélectionné)
-  const lessonColors=["#6366f1","#06b6d4","#f87171","#e879f9","#10b981","#f59e0b","#a855f7"];
+  const lessonColors=["#6366f1","#06b6d4","#f87171","#e879f9","#10b981","#f59e0b","#a855f7","#22c55e"];
   const lesColor=lessonColors[les]||"#6366f1";
 
   // Bloc d'en-tête de leçon (objectifs + tip)
