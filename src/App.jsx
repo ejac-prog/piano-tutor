@@ -128,12 +128,13 @@ const SONGS = {
         fingers:{F3:"5",A3:"3",C4:"1"}, arp:["F3","A3","C4","A3","F3","A3","C4","A3"] },
     ],
     riff: [
-      {note:"C4",dur:1},{note:"E4",dur:1},{note:"G4",dur:1},{note:"E4",dur:1},
-      {note:"C4",dur:1},{note:"E4",dur:1},{note:"G4",dur:2},
-      {note:"D4",dur:1},{note:"G4",dur:1},{note:"B4",dur:1},{note:"G4",dur:1},
-      {note:"D4",dur:1},{note:"G4",dur:1},{note:"B4",dur:2},
+      {note:"G4",dur:1},{note:"B4",dur:1},{note:"C5",dur:1},{note:"B4",dur:1},
+      {note:"A4",dur:1},{note:"B4",dur:1},{note:"G4",dur:2},
+      {note:"_",dur:2},
+      {note:"A4",dur:1},{note:"C5",dur:1},{note:"B4",dur:1},{note:"A4",dur:1},
+      {note:"B4",dur:1},{note:"A4",dur:1},{note:"G4",dur:2},
     ],
-    riffNotes: ["C4","D4","E4","G4","B4"],
+    riffNotes: ["G4","A4","B4","C5"],
     melody: {
       verse: { label:"Couplet",
         notes:[{note:"G4",dur:1},{note:"G4",dur:1},{note:"A4",dur:1},{note:"B4",dur:1},{note:"B4",dur:1},{note:"C5",dur:1},{note:"B4",dur:1},{note:"A4",dur:1},{note:"G4",dur:1},{note:"A4",dur:1},{note:"B4",dur:1},{note:"C5",dur:1},{note:"C5",dur:1},{note:"B4",dur:1},{note:"A4",dur:1},{note:"G4",dur:2}] },
