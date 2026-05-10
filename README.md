@@ -4,15 +4,15 @@ Tuteur piano interactif avec détection de notes (micro + MIDI). React 18 + Vite
 
 ## Comment ça marche
 
-L'application est un seul fichier React (`src/App.jsx`, environ 1500 lignes), sans dépendance externe au-delà de React. Une chanson est décomposée en sept leçons progressives : accords en blocs, arpèges, riff d'intro, mélodie couplet et refrain, coordination deux mains, montée vers le tempo réel, performance complète.
+L'application est un seul fichier React (`src/App.jsx`, environ 1600 lignes), sans dépendance externe au-delà de React. Chaque chanson est décomposée en sept leçons progressives : accords en blocs, arpèges, riff d'intro, mélodie couplet et refrain, coordination deux mains, montée vers le tempo réel, performance complète. Deux chansons incluses : *Zombie* (The Cranberries) et *A Thousand Years* (Christina Perri).
 
 La détection fonctionne de deux façons : par micro (algorithme d'autocorrélation sur le signal audio) ou par MIDI USB (Web MIDI API). Optimisé pour iPad 11 pouces en mode paysage, fonctionne aussi sur desktop et mobile.
 
-## Note importante sur la chanson de démonstration
+## Note importante sur les chansons de démonstration
 
-L'exemple inclus, *Zombie* des Cranberries (composition de Dolores O'Riordan, 1994), est une transcription mélodique simplifiée fournie à but pédagogique personnel uniquement. Les droits sur la composition originale appartiennent à leurs ayants droit (Universal Music Publishing Group). Les paroles ont été retirées du repo public, seules les notes restent.
+Les exemples inclus — *Zombie* des Cranberries (composition de Dolores O'Riordan, 1994) et *A Thousand Years* de Christina Perri (composition de Christina Perri et David Hodges, 2011) — sont des transcriptions mélodiques simplifiées fournies à but pédagogique personnel uniquement. Les droits sur les compositions originales appartiennent à leurs ayants droit respectifs. Les paroles ont été retirées du repo public, seules les notes restent.
 
-Si tu *fork* ce projet pour le redistribuer, **remplace le bloc `SONGS.zombie` dans `src/App.jsx` par une chanson du domaine public ou par une de tes propres compositions** avant de publier. La licence MIT couvre uniquement le code et le moteur, pas la donnée musicale d'exemple.
+Si tu *fork* ce projet pour le redistribuer, **remplace les blocs `SONGS.zombie` et `SONGS.thousandYears` dans `src/App.jsx` par des chansons du domaine public ou par tes propres compositions** avant de publier. La licence MIT couvre uniquement le code et le moteur, pas la donnée musicale d'exemple.
 
 ## Déploiement sur Cloudflare Pages
 

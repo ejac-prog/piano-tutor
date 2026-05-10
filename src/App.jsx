@@ -99,13 +99,83 @@ const SONGS = {
        tip:"Suis le guide. Intro, couplet, refrain, couplet, refrain, outro."},
     ],
   },
+  thousandYears: {
+    title: "A Thousand Years",
+    artist: "Christina Perri",
+    bpm: 70,
+    difficulty: "Débutant",
+    color: "#ec4899",
+    keys: [
+      {note:"C3",type:"w"},{note:"C#3",type:"b"},{note:"D3",type:"w"},{note:"D#3",type:"b"},
+      {note:"E3",type:"w"},{note:"F3",type:"w"},{note:"F#3",type:"b"},{note:"G3",type:"w"},
+      {note:"G#3",type:"b"},{note:"A3",type:"w"},{note:"A#3",type:"b"},{note:"B3",type:"w"},
+      {note:"C4",type:"w"},{note:"C#4",type:"b"},{note:"D4",type:"w"},{note:"D#4",type:"b"},
+      {note:"E4",type:"w"},{note:"F4",type:"w"},{note:"F#4",type:"b"},{note:"G4",type:"w"},
+      {note:"G#4",type:"b"},{note:"A4",type:"w"},{note:"A#4",type:"b"},{note:"B4",type:"w"},
+      {note:"C5",type:"w"},
+    ],
+    chords: [
+      { name:"C", full:"Do majeur", keys:["C3","E3","G3"], color:"#ec4899",
+        fingers:{C3:"5",E3:"3",G3:"1"}, arp:["C3","E3","G3","E3","C3","E3","G3","E3"] },
+      { name:"G", full:"Sol majeur", keys:["G3","B3","D4"], color:"#06b6d4",
+        fingers:{G3:"5",B3:"3",D4:"1"}, arp:["G3","B3","D4","B3","G3","B3","D4","B3"] },
+      { name:"Am", full:"La mineur", keys:["A3","C4","E4"], color:"#a78bfa",
+        fingers:{A3:"5",C4:"3",E4:"1"}, arp:["A3","C4","E4","C4","A3","C4","E4","C4"] },
+      { name:"F", full:"Fa majeur", keys:["F3","A3","C4"], color:"#f59e0b",
+        fingers:{F3:"5",A3:"3",C4:"1"}, arp:["F3","A3","C4","A3","F3","A3","C4","A3"] },
+    ],
+    riff: [
+      {note:"C4",dur:1},{note:"E4",dur:1},{note:"G4",dur:1},{note:"E4",dur:1},
+      {note:"C4",dur:1},{note:"E4",dur:1},{note:"G4",dur:2},
+      {note:"D4",dur:1},{note:"G4",dur:1},{note:"B4",dur:1},{note:"G4",dur:1},
+      {note:"D4",dur:1},{note:"G4",dur:1},{note:"B4",dur:2},
+    ],
+    riffNotes: ["C4","D4","E4","G4","B4"],
+    melody: {
+      verse: { label:"Couplet",
+        notes:[{note:"G4",dur:1},{note:"G4",dur:1},{note:"A4",dur:1},{note:"B4",dur:1},{note:"B4",dur:1},{note:"C5",dur:1},{note:"B4",dur:1},{note:"A4",dur:1},{note:"G4",dur:1},{note:"A4",dur:1},{note:"B4",dur:1},{note:"C5",dur:1},{note:"C5",dur:1},{note:"B4",dur:1},{note:"A4",dur:1},{note:"G4",dur:2}] },
+      chorus: { label:"Refrain",
+        notes:[{note:"G4",dur:1},{note:"B4",dur:1},{note:"A4",dur:1},{note:"G4",dur:1},{note:"A4",dur:1},{note:"B4",dur:1},{note:"C5",dur:1},{note:"B4",dur:1},{note:"A4",dur:1},{note:"G4",dur:2},{note:"_",dur:1},{note:"G4",dur:1},{note:"B4",dur:1},{note:"A4",dur:1},{note:"G4",dur:1},{note:"A4",dur:1},{note:"B4",dur:1},{note:"C5",dur:1},{note:"B4",dur:1},{note:"A4",dur:1},{note:"G4",dur:2}] },
+    },
+    melodyNotes: ["G4","A4","B4","C5"],
+    melFingers: {G4:"1",A4:"2",B4:"3",C5:"4"},
+    melPerChord: [["G4","G4","A4","B4"],["B4","C5","B4","A4"],["G4","A4","B4","C5"],["C5","B4","A4","G4"]],
+    structure: [
+      {section:"intro",label:"Intro",reps:1},{section:"verse",label:"Couplet 1",reps:2},
+      {section:"chorus",label:"Refrain",reps:2},{section:"verse",label:"Couplet 2",reps:2},
+      {section:"chorus",label:"Refrain",reps:2},{section:"outro",label:"Outro",reps:1},
+    ],
+    lessons: [
+      {t:"Les 4 accords",s:"Main gauche, blocs",icon:"①",wk:"Sem. 1",
+       goals:["Trouver chaque accord sans hésiter","Enchaîner C → G → Am → F","Tenir 60 bpm"],
+       tip:"Les 4 accords les plus joués au monde. Doigts proches des touches, mouvement minimal."},
+      {t:"Arpèges",s:"Main gauche, décomposé",icon:"②",wk:"Sem. 1-2",
+       goals:["Jouer l'arpège de C en boucle","Enchaîner les 4 arpèges","Tenir 60 bpm en arpèges"],
+       tip:"Pattern bas-milieu-haut-milieu, comme une vague qui monte et redescend."},
+      {t:"Intro qui roule",s:"Main droite, le hook",icon:"③",wk:"Sem. 2",
+       goals:["Jouer l'arpège ascendant lentement","Le jouer à 60 bpm","Le boucler 4x sans erreur"],
+       tip:"C'est le motif qu'on entend dans Twilight. Joue-le doux, comme une boîte à musique."},
+      {t:"La mélodie",s:"Main droite, couplet + refrain",icon:"④",wk:"Sem. 2",
+       goals:["Jouer le couplet","Jouer le refrain","Enchaîner les deux sans pause"],
+       tip:"Pouce sur sol, index sur la, majeur sur si, annulaire sur do."},
+      {t:"Les deux mains",s:"Coordination lente",icon:"⑤",wk:"Sem. 3",
+       goals:["Accord + 2 notes de mélodie","2 accords avec mélodie à 40 bpm","Boucle complète à 50 bpm"],
+       tip:"Plaque l'accord, garde-le enfoncé, puis ajoute UNE note de mélodie."},
+      {t:"Tempo réel",s:"Montée vers 70 bpm",icon:"⑥",wk:"Sem. 3-4",
+       goals:["Boucle complète à 60 bpm","Nuances : refrain plus chargé","Jouer sans regarder"],
+       tip:"C'est une ballade : laisse respirer entre les phrases, ne te précipite pas."},
+      {t:"Performance",s:"La chanson au complet",icon:"⑦",wk:"Sem. 4",
+       goals:["Enchaîner intro → couplet → refrain","Jouer la structure complète","Le faire devant tes amis"],
+       tip:"Suis le guide. Intro, couplet, refrain, couplet, refrain, outro."},
+    ],
+  },
 };
 
 /* ═══════════════════════════════════════════════════════════════════
    CORE UTILS
    ═══════════════════════════════════════════════════════════════════ */
 const NFR={C:"Do","C#":"Do#",D:"Ré","D#":"Ré#",E:"Mi",F:"Fa","F#":"Fa#",G:"Sol","G#":"Sol#",A:"La","A#":"La#",B:"Si"};
-const FREQ={C3:130.81,"C#3":138.59,D3:146.83,"D#3":155.56,E3:164.81,F3:174.61,"F#3":185,G3:196,"G#3":207.65,A3:220,"A#3":233.08,B3:246.94,C4:261.63,"C#4":277.18,D4:293.66,"D#4":311.13,E4:329.63};
+const FREQ={C3:130.81,"C#3":138.59,D3:146.83,"D#3":155.56,E3:164.81,F3:174.61,"F#3":185,G3:196,"G#3":207.65,A3:220,"A#3":233.08,B3:246.94,C4:261.63,"C#4":277.18,D4:293.66,"D#4":311.13,E4:329.63,F4:349.23,"F#4":369.99,G4:392,"G#4":415.30,A4:440,"A#4":466.16,B4:493.88,C5:523.25};
 const fr=n=>NFR[n.replace(/\d/,"")]||n;
 // Construit un hand map à partir d'une liste de notes et d'une lettre de main ("L" ou "R")
 const handsOf=(notes,h)=>{const o={};notes.forEach(n=>{o[n]=h});return o};
